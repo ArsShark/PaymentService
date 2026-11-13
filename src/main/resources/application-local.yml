@@ -1,0 +1,8 @@
+# Profile "local": the application runs on the host (IDE or .\mvnw spring-boot:run),
+# MongoDB is reachable on localhost. Environment variables override every default.
+# Credentials (MONGO_USERNAME, MONGO_PASSWORD) have no defaults and are never stored in this file.
+spring:
+  mongodb:
+    host: ${MONGO_HOST:localhost}
+    port: ${MONGO_PORT:27017}
+    database: ${MONGO_DB:payment_service_db}

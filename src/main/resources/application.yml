@@ -1,0 +1,14 @@
+spring:
+  application:
+    name: payment-service
+  profiles:
+    # Used when no profile is set (IDE, .\mvnw spring-boot:run).
+    default: local
+  mongodb:
+    # Host, port and database are defined per profile (application-local.yml).
+    # The credentials have no defaults and are never stored in the repository.
+    username: ${MONGO_USERNAME}
+    password: ${MONGO_PASSWORD}
+    authentication-database: ${MONGO_AUTH_DB:admin}
+server:
+  port: ${SERVER_PORT:8084}
