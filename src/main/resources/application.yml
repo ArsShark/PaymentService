@@ -10,5 +10,13 @@ spring:
     username: ${MONGO_USERNAME}
     password: ${MONGO_PASSWORD}
     authentication-database: ${MONGO_AUTH_DB:admin}
+  data:
+    mongodb:
+      # Spring Data MongoDB 5 has no default for BigDecimal: it must be chosen. Decimal128 is
+      # the numeric type of MongoDB, so amounts can be compared and added up by the database.
+      representation:
+        big-decimal: decimal128
+      # Liquibase is the only owner of the indexes; annotations never create one.
+      auto-index-creation: false
 server:
   port: ${SERVER_PORT:8084}
