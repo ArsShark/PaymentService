@@ -43,7 +43,7 @@ public class MongoMigration implements InitializingBean {
   private static final int DEFAULT_PORT = 27017;
   private static final String DEFAULT_AUTHENTICATION_DATABASE = "admin";
   private static final int CONNECT_TIMEOUT_MS = 2000;
-  private static final int SERVER_SELECTION_TIMEOUT_MS = 5000;
+  static final int DEFAULT_SERVER_SELECTION_TIMEOUT_MS = 5000;
   private static final int MAX_CAUSE_DEPTH = 10;
   private static final String MASK = "***";
 
@@ -53,6 +53,7 @@ public class MongoMigration implements InitializingBean {
   private final String username;
   private final String password;
   private final String authenticationDatabase;
+  private final int serverSelectionTimeoutMs;
 
   /**
    * Reads the connection settings of the application.
@@ -62,6 +63,15 @@ public class MongoMigration implements InitializingBean {
    *     username and the password is set
    */
   public MongoMigration(Environment environment) {
+    this(environment, DEFAULT_SERVER_SELECTION_TIMEOUT_MS);
+  }
+
+  /**
+   * Like {@link #MongoMigration(Environment)} with a chosen time to wait for the server; the
+   * tests use a short one for a server that is not there.
+   */
+  MongoMigration(Environment environment, int serverSelectionTimeoutMs) {
+    this.serverSelectionTimeoutMs = serverSelectionTimeoutMs;
     this.host = environment.getRequiredProperty("spring.mongodb.host");
     this.port = environment.getProperty("spring.mongodb.port", Integer.class, DEFAULT_PORT);
     this.database = environment.getRequiredProperty("spring.mongodb.database");
@@ -78,7 +88,8 @@ public class MongoMigration implements InitializingBean {
   @Override
   public void afterPropertiesSet() {
     LOGGER.info("Applying the MongoDB changelog {}", CHANGELOG);
-    String url = connectionUrl(host, port, database, username, password, authenticationDatabase);
+    String url = connectionUrl(
+      host, port, database, username, password, authenticationDatabase, serverSelectionTimeoutMs);
     try (ResourceAccessor accessor =
            new ClassLoaderResourceAccessor(MongoMigration.class.getClassLoader());
          Database liquibaseDatabase =
@@ -97,7 +108,8 @@ public class MongoMigration implements InitializingBean {
    * driver decodes them. {@code authSource} is the database in which the user was created.
    */
   static String connectionUrl(String host, int port, String database, String username,
-                              String password, String authenticationDatabase) {
+                              String password, String authenticationDatabase,
+                              int serverSelectionTimeoutMs) {
     StringBuilder url = new StringBuilder("mongodb://");
     boolean withCredentials = StringUtils.hasText(username);
     if (withCredentials) {
@@ -106,7 +118,7 @@ public class MongoMigration implements InitializingBean {
     }
     url.append(host).append(':').append(port).append('/').append(database)
       .append("?connectTimeoutMS=").append(CONNECT_TIMEOUT_MS)
-      .append("&serverSelectionTimeoutMS=").append(SERVER_SELECTION_TIMEOUT_MS);
+      .append("&serverSelectionTimeoutMS=").append(serverSelectionTimeoutMs);
     if (withCredentials) {
       url.append("&authSource=").append(encode(authenticationDatabase));
     }

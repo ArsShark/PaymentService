@@ -36,7 +36,8 @@ class MongoMigrationTest {
   @Test
   void theConnectionStringCarriesTheEncodedCredentialsAndTheTimeouts() {
     String url = MongoMigration.connectionUrl(
-      "mongo.example", 27018, "payments_db", "pay user", AWKWARD_PASSWORD, "admin");
+      "mongo.example", 27018, "payments_db", "pay user", AWKWARD_PASSWORD, "admin",
+      MongoMigration.DEFAULT_SERVER_SELECTION_TIMEOUT_MS);
 
     ConnectionString parsed = new ConnectionString(url);
     MongoCredential credential = parsed.getCredential();
@@ -55,7 +56,8 @@ class MongoMigrationTest {
   @Test
   void withoutAUsernameTheConnectionStringHasNoCredentials() {
     String url = MongoMigration.connectionUrl(
-      "localhost", 27017, "payments_db", null, null, "admin");
+      "localhost", 27017, "payments_db", null, null, "admin",
+      MongoMigration.DEFAULT_SERVER_SELECTION_TIMEOUT_MS);
 
     ConnectionString parsed = new ConnectionString(url);
     assertAll(
@@ -89,7 +91,8 @@ class MongoMigrationTest {
   @Test
   void aFailureIsDescribedWithoutTheConnectionStringAndThePassword() {
     String url = MongoMigration.connectionUrl(
-      "mongo.example", 27018, "payments_db", "pay", AWKWARD_PASSWORD, "admin");
+      "mongo.example", 27018, "payments_db", "pay", AWKWARD_PASSWORD, "admin",
+      MongoMigration.DEFAULT_SERVER_SELECTION_TIMEOUT_MS);
     Exception failure = new IllegalStateException(
       String.format("cannot open %s", url),
       new IllegalArgumentException(String.format("rejected the password %s", AWKWARD_PASSWORD)));
@@ -107,14 +110,14 @@ class MongoMigrationTest {
 
   @Test
   void anUnreachableServerStopsTheStartupWithoutRevealingThePassword() {
-    // Nothing listens on port 1: the driver gives up after the server selection timeout (5 s).
+    // Nothing listens on port 1: the driver gives up after the (short) server selection timeout.
     MockEnvironment unreachable = new MockEnvironment()
       .withProperty("spring.mongodb.host", "localhost")
       .withProperty("spring.mongodb.port", "1")
       .withProperty("spring.mongodb.database", "payments_db")
       .withProperty("spring.mongodb.username", "pay")
       .withProperty("spring.mongodb.password", AWKWARD_PASSWORD);
-    MongoMigration migration = new MongoMigration(unreachable);
+    MongoMigration migration = new MongoMigration(unreachable, 300);
 
     IllegalStateException thrown =
       assertThrows(IllegalStateException.class, migration::afterPropertiesSet);
