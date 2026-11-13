@@ -51,8 +51,10 @@ The user is created on the FIRST start, when the volume is empty. Changing `MONG
 afterwards changes nothing in MongoDB; reset it with `docker compose down -v`, which deletes the
 data. MongoDB is published only on `127.0.0.1`.
 
-Run the application from the IDE or with `.\mvnw spring-boot:run` with `MONGO_USERNAME` and
-`MONGO_PASSWORD` set in the environment (the same values as in `.env`).
+Run the application from the IDE or with `.\mvnw spring-boot:run` from the project folder: the
+profile `local` also reads the `.env` file of the working directory (as Java properties, so no
+quotes around a value), and the same values serve Docker Compose and the application. Real
+environment variables win over `.env`. In the `docker` profile `.env` is not read.
 
 ## Database
 
@@ -91,6 +93,6 @@ share one Spring context and one container.
 
 | Symptom | Cause and fix |
 |---|---|
-| `Could not resolve placeholder 'MONGO_USERNAME'` | the variable is not set in the environment of the run (a `.env` file is read by Compose only) |
+| `Could not resolve placeholder 'MONGO_USERNAME'` | there is no `.env` in the working directory of the run (the IDE must run in the project folder) and the variable is not set |
 | `Authentication failed` | the user was created with other values: `docker compose down -v` and start again |
 | `Applying the MongoDB changelog failed: ... timed out` | MongoDB is not running or the port is different |

@@ -2,6 +2,11 @@
 # MongoDB is reachable on localhost. Environment variables override every default.
 # Credentials (MONGO_USERNAME, MONGO_PASSWORD) have no defaults and are never stored in this file.
 spring:
+  config:
+    # The .env file of Docker Compose is read too, if it exists in the working directory, so the
+    # IDE needs no environment variables of its own. Real environment variables win over it.
+    # The file is read as Java properties here, so a value must not be in quotes.
+    import: optional:file:.env[.properties]
   mongodb:
     host: ${MONGO_HOST:localhost}
     port: ${MONGO_PORT:27017}
