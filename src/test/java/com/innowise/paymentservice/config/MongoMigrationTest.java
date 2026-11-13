@@ -20,8 +20,11 @@ import org.springframework.mock.env.MockEnvironment;
  */
 class MongoMigrationTest {
 
-  /** Characters that break an unencoded connection string: at, colon, slash, plus, percent. */
-  private static final String AWKWARD_PASSWORD = "p@ss:w/rd+1%";
+  /**
+   * Characters that break an unencoded connection string: at, colon, slash, plus, percent and
+   * a space (a space is written as %20, not as a plus sign).
+   */
+  private static final String AWKWARD_PASSWORD = "p@ss:w/rd+1% x";
 
   private static MockEnvironment environment() {
     return new MockEnvironment()

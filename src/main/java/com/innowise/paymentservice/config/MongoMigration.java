@@ -137,7 +137,13 @@ public class MongoMigration implements InitializingBean {
     return description.toString();
   }
 
+  /**
+   * URL-encodes a part of the user info. {@link URLEncoder} follows the rules of HTML forms and
+   * writes a space as a plus sign, but the MongoDB driver does not turn a plus sign in the user
+   * info back into a space (it would log in as "pay+user"), so the space is written as %20.
+   * A real plus sign is already encoded as %2B.
+   */
   private static String encode(String value) {
-    return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
   }
 }
