@@ -1,0 +1,38 @@
+# The extension liquibase-mongodb runs the command with db.runCommand(). The command is plain
+# MongoDB extended JSON, so every MongoDB option is available and the file reads like the
+# MongoDB documentation.
+#
+# The validator is the schema of the collection: MongoDB itself rejects a document of another
+# shape (error code 121), whoever writes it. Field names follow the task (snake_case).
+# order_id and user_id are "long" (int64) because the ids of the Order and User services are
+# Java Long. payment_amount is "decimal" (Decimal128): a string or a double cannot be summed
+# exactly. The field _class that Spring Data adds is allowed on purpose (no additionalProperties).
+databaseChangeLog:
+  - changeSet:
+      id: create-payments-collection
+      author: arsshark
+      changes:
+        - runCommand:
+            command: |
+              {
+                "create": "payments",
+                "validationLevel": "strict",
+                "validationAction": "error",
+                "validator": {
+                  "$jsonSchema": {
+                    "bsonType": "object",
+                    "required": ["order_id", "user_id", "status", "timestamp", "payment_amount"],
+                    "properties": {
+                      "order_id": { "bsonType": "long" },
+                      "user_id": { "bsonType": "long" },
+                      "status": { "bsonType": "string", "enum": ["SUCCESS", "FAILED"] },
+                      "timestamp": { "bsonType": "date" },
+                      "payment_amount": {
+                        "bsonType": "decimal",
+                        "minimum": 0,
+                        "exclusiveMinimum": true
+                      }
+                    }
+                  }
+                }
+              }
