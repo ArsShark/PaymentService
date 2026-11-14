@@ -14,6 +14,7 @@ import liquibase.resource.ResourceAccessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -62,6 +63,7 @@ public class MongoMigration implements InitializingBean {
    * @throws IllegalStateException if the host or the database is missing, or only one of the
    *     username and the password is set
    */
+  @Autowired
   public MongoMigration(Environment environment) {
     this(environment, DEFAULT_SERVER_SELECTION_TIMEOUT_MS);
   }

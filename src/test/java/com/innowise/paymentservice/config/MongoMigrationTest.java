@@ -9,8 +9,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoCredential;
+import java.lang.reflect.Constructor;
+import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.env.Environment;
 import org.springframework.mock.env.MockEnvironment;
 
 /**
@@ -31,6 +35,20 @@ class MongoMigrationTest {
       .withProperty("spring.mongodb.host", "mongo.example")
       .withProperty("spring.mongodb.port", "27018")
       .withProperty("spring.mongodb.database", "payments_db");
+  }
+
+  @Test
+  void springKnowsWhichConstructorToUse() {
+    // With two constructors and no @Autowired Spring looks for a default constructor and the
+    // application does not start ("No default constructor found").
+    List<Constructor<?>> autowired = Arrays.stream(MongoMigration.class.getDeclaredConstructors())
+      .filter(constructor -> constructor.isAnnotationPresent(Autowired.class))
+      .toList();
+
+    assertAll(
+      () -> assertEquals(1, autowired.size()),
+      () -> assertEquals(List.of(Environment.class),
+        Arrays.asList(autowired.get(0).getParameterTypes())));
   }
 
   @Test
