@@ -1,13 +1,20 @@
 package com.innowise.paymentservice.repository;
 
 import com.innowise.paymentservice.entity.Payment;
+import com.innowise.paymentservice.entity.PaymentStatus;
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import org.bson.Document;
+import org.bson.types.Decimal128;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.TypedAggregation;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.support.PageableExecutionUtils;
@@ -23,6 +30,9 @@ class PaymentQueriesImpl implements PaymentQueries {
 
   /** The property of the id; Spring Data maps it to the field {@code _id}. */
   private static final String ID = "id";
+
+  /** What a period without payments adds up to: zero, with the scale of every amount. */
+  private static final BigDecimal NO_MONEY = BigDecimal.ZERO.setScale(Payment.AMOUNT_SCALE);
 
   private final MongoTemplate mongoTemplate;
 
@@ -77,5 +87,55 @@ class PaymentQueriesImpl implements PaymentQueries {
     }
     return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
       sort.and(Sort.by(ID)));
+  }
+
+  @Override
+  public PaymentTotal sumOfUser(long userId, Instant from, Instant before) {
+    return sum(successfulBetween(from, before).and("userId").is(userId));
+  }
+
+  @Override
+  public PaymentTotal sumOfAll(Instant from, Instant before) {
+    return sum(successfulBetween(from, before));
+  }
+
+  /** Successful payments made in {@code [from, before)}. */
+  private static Criteria successfulBetween(Instant from, Instant before) {
+    Objects.requireNonNull(from, "from");
+    Objects.requireNonNull(before, "before");
+    return Criteria.where("status").is(PaymentStatus.SUCCESS)
+      .and("timestamp").gte(from).lt(before);
+  }
+
+  /**
+   * Adds up the matching payments in the database: {@code $match} and then one {@code $group}
+   * over all of them, which gives the sum and the count in a single round trip. MongoDB adds
+   * Decimal128 values exactly, so nothing is rounded on the way. A {@code $group} over no
+   * documents returns no document at all, which is the zero case.
+   */
+  private PaymentTotal sum(Criteria criteria) {
+    TypedAggregation<Payment> aggregation = Aggregation.newAggregation(Payment.class,
+      Aggregation.match(criteria),
+      Aggregation.group().sum("paymentAmount").as("total").count().as("count"));
+
+    Document result = mongoTemplate.aggregate(aggregation, Document.class)
+      .getUniqueMappedResult();
+    if (result == null) {
+      return new PaymentTotal(NO_MONEY, 0);
+    }
+    return new PaymentTotal(toBigDecimal(result.get("total")),
+      ((Number) result.get("count")).longValue());
+  }
+
+  private static BigDecimal toBigDecimal(Object value) {
+    if (value instanceof Decimal128 decimal) {
+      return decimal.bigDecimalValue();
+    }
+    if (value instanceof BigDecimal decimal) {
+      return decimal;
+    }
+    // Anything else means the amounts are not Decimal128 (a string would not even be added up).
+    throw new IllegalStateException(String.format("Unexpected type of the total: %s",
+      value == null ? "null" : value.getClass().getName()));
   }
 }

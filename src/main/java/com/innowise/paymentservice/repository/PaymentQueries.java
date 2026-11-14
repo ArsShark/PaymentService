@@ -1,6 +1,7 @@
 package com.innowise.paymentservice.repository;
 
 import com.innowise.paymentservice.entity.Payment;
+import java.time.Instant;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
@@ -50,4 +51,33 @@ public interface PaymentQueries {
    * @throws IllegalArgumentException if {@code pageable} is not paged
    */
   Page<Payment> findAll(PaymentFilter filter, Pageable pageable);
+
+  /**
+   * Adds up the successful payments of one user in a period.
+   *
+   * <p>Only payments with the status {@code SUCCESS} count: a declined payment moved no money.
+   * The period is half-open, {@code [from, before)}: a payment made exactly at {@code from} is in,
+   * one made exactly at {@code before} is not, so periods placed one after another neither
+   * overlap nor leave a gap. MongoDB keeps milliseconds, so the bounds lose anything finer. An
+   * empty or reversed period gives zero.
+   *
+   * <p>The user is a primitive {@code long} on purpose: a {@code null} that means "everybody"
+   * would show a user the total of all users. The total of all users is {@link #sumOfAll}.
+   *
+   * @param userId the payer
+   * @param from   the start of the period, inclusive
+   * @param before the end of the period, exclusive
+   * @return the total and the number of payments; {@code 0.00} and 0 when there are none
+   */
+  PaymentTotal sumOfUser(long userId, Instant from, Instant before);
+
+  /**
+   * Adds up the successful payments of all users in a period. The same rules as
+   * {@link #sumOfUser}; meant for the administrator.
+   *
+   * @param from   the start of the period, inclusive
+   * @param before the end of the period, exclusive
+   * @return the total and the number of payments; {@code 0.00} and 0 when there are none
+   */
+  PaymentTotal sumOfAll(Instant from, Instant before);
 }
