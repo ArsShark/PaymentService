@@ -1,6 +1,7 @@
 package com.innowise.paymentservice.entity;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Objects;
@@ -27,6 +28,9 @@ import org.springframework.data.mongodb.core.mapping.FieldType;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Payment {
 
+  /** The number of decimal places of an amount, as in the order total of the Order Service. */
+  public static final int AMOUNT_SCALE = 2;
+
   @Id
   private String id;
 
@@ -43,7 +47,10 @@ public class Payment {
   /** When the payment was made. MongoDB keeps milliseconds, so the constructor cuts the rest. */
   private Instant timestamp;
 
-  /** Stored as Decimal128, so MongoDB can add the amounts up exactly. */
+  /**
+   * Stored as Decimal128, so MongoDB can add the amounts up exactly. Always has exactly two
+   * decimal places (see {@link #AMOUNT_SCALE}), so every sum of amounts has them too.
+   */
   @Field(name = "payment_amount", targetType = FieldType.DECIMAL128)
   private BigDecimal paymentAmount;
 
@@ -54,7 +61,9 @@ public class Payment {
    * @param userId the id of the payer
    * @param status the outcome
    * @param timestamp when the payment was made; sub-millisecond digits are dropped
-   * @param paymentAmount the amount, positive
+   * @param paymentAmount the amount, positive; kept with exactly two decimal places, so
+   *                      {@code 24} becomes {@code 24.00}
+   * @throws IllegalArgumentException if the amount has more than two significant decimal places
    */
   public Payment(long orderId, long userId, PaymentStatus status, Instant timestamp,
                  BigDecimal paymentAmount) {
@@ -62,6 +71,20 @@ public class Payment {
     this.userId = userId;
     this.status = Objects.requireNonNull(status, "status");
     this.timestamp = Objects.requireNonNull(timestamp, "timestamp").truncatedTo(ChronoUnit.MILLIS);
-    this.paymentAmount = Objects.requireNonNull(paymentAmount, "paymentAmount");
+    this.paymentAmount = toAmountScale(Objects.requireNonNull(paymentAmount, "paymentAmount"));
+  }
+
+  /**
+   * Gives the amount exactly two decimal places. Decimal128 keeps the scale, and {@code 24} and
+   * {@code 24.00} are different values for {@link BigDecimal#equals(Object)}; the event for the
+   * Order Service also carries the amount as text, so one scale everywhere is needed. An amount
+   * that would lose a digit is refused, not rounded: nobody may pay a different sum than asked.
+   */
+  private static BigDecimal toAmountScale(BigDecimal amount) {
+    try {
+      return amount.setScale(AMOUNT_SCALE, RoundingMode.UNNECESSARY);
+    } catch (ArithmeticException e) {
+      throw new IllegalArgumentException("paymentAmount must have at most two decimal places", e);
+    }
   }
 }
