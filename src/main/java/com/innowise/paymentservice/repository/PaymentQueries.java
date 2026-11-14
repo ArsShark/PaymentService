@@ -1,6 +1,8 @@
 package com.innowise.paymentservice.repository;
 
 import com.innowise.paymentservice.entity.Payment;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 /**
  * The operations of {@link PaymentRepository} that Spring Data cannot derive from a method name.
@@ -27,4 +29,25 @@ public interface PaymentQueries {
    * @throws org.springframework.dao.DuplicateKeyException if a unique index already holds the key
    */
   Payment insert(Payment payment);
+
+  /**
+   * Finds a page of the payments that match the filter.
+   *
+   * <p>The order of the list is always deterministic: the sort of the request is used, and the
+   * id is appended as the last sort key when the request does not sort by it. Without a unique
+   * last key MongoDB may return rows with equal values in a different order for every page, so
+   * pages could overlap or skip payments. The names in the sort are the properties of
+   * {@link Payment} ({@code timestamp}, {@code paymentAmount}, {@code orderId}, {@code userId},
+   * {@code status}, {@code id}); which of them a client may use is decided by the controller.
+   *
+   * <p>Sorting by the id after another key cannot be served by an index alone, so MongoDB sorts
+   * the matching payments in memory; a list without any filter reads the whole collection. The
+   * filtered lists use the indexes of the collection (see the tests of the query plans).
+   *
+   * @param filter   the conditions, {@link PaymentFilter#any()} for none
+   * @param pageable the page and the sort; must be paged
+   * @return the page, with the total number of matching payments
+   * @throws IllegalArgumentException if {@code pageable} is not paged
+   */
+  Page<Payment> findAll(PaymentFilter filter, Pageable pageable);
 }
