@@ -1,0 +1,32 @@
+# Local infrastructure of the Payment Service. For now only MongoDB: the application runs on
+# the host (IDE or .\mvnw spring-boot:run). Kafka (JACAG-24) and the application (JACAG-27)
+# are added by later tasks.
+name: payment-service
+
+services:
+  mongodb:
+    image: mongo:8
+    environment:
+      # The first start creates this user in the database "admin" (the data volume must be
+      # empty). Changing the values later changes nothing: see the README.
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME:?MONGO_USERNAME must be set in .env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?MONGO_PASSWORD must be set in .env}
+    ports:
+      # Only on the loopback interface: the application runs on the host. When the application
+      # joins this file (JACAG-27), the port is not published any more.
+      - "127.0.0.1:${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      # Logs in with the root user, so it passes only after the first start has created it
+      # (a failed login makes mongosh exit with an error). The string form of "test" runs the
+      # command in the shell of the container, like CMD-SHELL. "$$" keeps Compose from
+      # interpolating the variables: the shell of the container does.
+      test: mongosh --quiet -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --eval "db.adminCommand('ping')"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  mongo-data:

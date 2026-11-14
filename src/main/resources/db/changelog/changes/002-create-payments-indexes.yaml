@@ -1,0 +1,40 @@
+# Indexes of the collection "payments" (names: idx_ for plain, uq_ for unique).
+#
+# idx_payments_user_id_timestamp  : the payments of a user, newest first; the totals of a user
+# idx_payments_order_id_timestamp : the payments of an order
+# idx_payments_status_timestamp   : the payments with a status; the totals of all users
+# uq_payments_order_id_success    : an order has at most ONE successful payment. The index is
+#   partial (only documents with status SUCCESS are in it), so any number of FAILED payments
+#   of the same order is allowed, and two parallel requests cannot both succeed: the second
+#   insert fails with the error code 11000 (duplicate key), decided by the database, not by a
+#   check in the code.
+databaseChangeLog:
+  - changeSet:
+      id: create-payments-indexes
+      author: arsshark
+      changes:
+        - runCommand:
+            command: |
+              {
+                "createIndexes": "payments",
+                "indexes": [
+                  {
+                    "key": { "user_id": 1, "timestamp": -1 },
+                    "name": "idx_payments_user_id_timestamp"
+                  },
+                  {
+                    "key": { "order_id": 1, "timestamp": -1 },
+                    "name": "idx_payments_order_id_timestamp"
+                  },
+                  {
+                    "key": { "status": 1, "timestamp": -1 },
+                    "name": "idx_payments_status_timestamp"
+                  },
+                  {
+                    "key": { "order_id": 1 },
+                    "name": "uq_payments_order_id_success",
+                    "unique": true,
+                    "partialFilterExpression": { "status": "SUCCESS" }
+                  }
+                ]
+              }
