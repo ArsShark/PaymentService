@@ -3,9 +3,9 @@
 Payment microservice of the course e-commerce application (Innowise Java Advanced). Part of a
 system with the Authentication Service, the API Gateway, the User Service and the Order Service.
 
-> Work in progress: the database schema (JACAG-21) is done. The DAO layer, the service layer,
-> the REST API, Kafka, the tests, the container setup and the CI pipeline follow
-> (JACAG-22 to JACAG-28).
+> Work in progress: the database schema (JACAG-21) and the DAO layer (JACAG-22) are done. The
+> service layer, the REST API, Kafka, the container setup and the CI pipeline follow
+> (JACAG-23 to JACAG-28).
 
 ## Stack
 
@@ -80,6 +80,47 @@ The collection `payments` is created by Liquibase when the application starts
 - Amounts are Decimal128, never strings or doubles: MongoDB adds them up exactly (a string is
   silently ignored by `$sum`).
 
+## Data access
+
+`PaymentRepository` is the only way to the collection. It extends the marker `Repository`, not
+`MongoRepository`, and has no `save` and no `delete`: a payment is a record of what happened and
+never changes, so nothing can replace or remove one. The queries that need `MongoTemplate` are
+in `PaymentQueries` (implemented by `PaymentQueriesImpl`).
+
+| Method | What it does |
+|---|---|
+| `insert(Payment)` | Saves a new payment and returns it with its id. Never replaces. |
+| `findById(String)` | One payment by its id, or empty. |
+| `findAll(PaymentFilter, Pageable)` | A page of payments; the filter has optional `userId`, `orderId`, `status`, combined with AND. |
+| `sumOfUser(long, Instant, Instant)` | Total and count of the successful payments of one user in `[from, before)`. |
+| `sumOfAll(Instant, Instant)` | The same for all users (for the administrator). |
+
+- **One scale.** An amount has exactly two decimal places (`24` becomes `24.00`); an amount with
+  more significant places is refused by the constructor of `Payment`, not rounded. So every sum
+  has two decimal places too, and an empty period is `0.00`.
+- **One successful payment per order.** The partial unique index
+  `uq_payments_order_id_success` decides, also when two requests arrive together. The second
+  `insert` throws `DuplicateKeyException`; `ViolatedIndex.nameOf(...)` returns the name of the
+  index (MongoDB puts it only into the text of the error, and a test on a real MongoDB pins the
+  format). Any other index name is a bug and must not be treated as "order already paid".
+- **Totals** add up only `SUCCESS` payments, in the database (`$match` and one `$group`), and
+  Decimal128 is added up exactly. The period is half-open: a payment exactly at `from` is in,
+  exactly at `before` is out. MongoDB keeps milliseconds, so the bounds lose anything finer.
+  The user of `sumOfUser` is a primitive `long`: a `null` meaning "everybody" would show a user
+  the total of all users.
+- **Stable pages.** The id is always the last sort key, so equal sort values cannot make pages
+  overlap or skip a payment. Which properties a client may sort by is decided by the controller.
+
+Known limits:
+
+- A list without any filter reads the whole collection and sorts it in memory (no index starts
+  with the time). Lists with a filter use the indexes: the test `QueryPlanIntegrationTest`
+  reads the plan that the server recorded for the real command. The id as the last sort key
+  means MongoDB also sorts the matching payments in memory; that is cheap for the payments of
+  one user or one order.
+- Writing to the database and then to Kafka are two steps (JACAG-24); the insert is not
+  undone if the event cannot be sent.
+
 ## Tests
 
 ```
@@ -87,7 +128,8 @@ The collection `payments` is created by Liquibase when the application starts
 ```
 
 The integration tests start a MongoDB container with Testcontainers (Docker must run). They
-share one Spring context and one container.
+share one Spring context and one container. `QueryPlanIntegrationTest` switches the profiler of
+MongoDB on for the time of a query to read its plan.
 
 ## Troubleshooting
 
@@ -96,3 +138,4 @@ share one Spring context and one container.
 | `Could not resolve placeholder 'MONGO_USERNAME'` | there is no `.env` in the working directory of the run (the IDE must run in the project folder) and the variable is not set |
 | `Authentication failed` | the user was created with other values: `docker compose down -v` and start again |
 | `Applying the MongoDB changelog failed: ... timed out` | MongoDB is not running or the port is different |
+| The first changeSet fails because the collection `payments` already exists | The collection was created by hand (for example by an `insertMany` in `mongosh`) before the application first started, so it has no validator and no indexes. `db.payments.drop()` in `mongosh` and start the application again, or `docker compose down -v` |
