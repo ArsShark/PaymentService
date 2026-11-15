@@ -90,6 +90,13 @@ class PaymentQueriesImpl implements PaymentQueries {
   }
 
   @Override
+  public boolean hasSuccessfulPayment(long orderId) {
+    Query query = new Query(Criteria.where("orderId").is(orderId)
+      .and("status").is(PaymentStatus.SUCCESS));
+    return mongoTemplate.exists(query, Payment.class);
+  }
+
+  @Override
   public PaymentTotal sumOfUser(long userId, Instant from, Instant before) {
     return sum(successfulBetween(from, before).and("userId").is(userId));
   }

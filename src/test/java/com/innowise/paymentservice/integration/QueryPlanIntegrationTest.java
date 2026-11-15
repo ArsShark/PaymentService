@@ -2,6 +2,7 @@ package com.innowise.paymentservice.integration;
 
 import static com.innowise.paymentservice.integration.PaymentTestData.payment;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.innowise.paymentservice.TestcontainersConfiguration;
@@ -82,6 +83,16 @@ class QueryPlanIntegrationTest extends AbstractIntegrationTest {
         entries.size())));
   }
 
+  /** The plan of the first recorded command that has one, whatever the command is. */
+  private static String firstPlan(List<Document> entries) {
+    return entries.stream()
+      .map(entry -> entry.getString("planSummary"))
+      .filter(plan -> plan != null)
+      .findFirst()
+      .orElseThrow(() -> new AssertionError(String.format(
+        "The profiler recorded no planSummary; entries: %d", entries.size())));
+  }
+
   private String planOfList(PaymentFilter filter) {
     List<Document> entries = profiled(() -> repository.findAll(filter,
       PageRequest.of(0, 10, Sort.by(Sort.Direction.DESC, "timestamp"))));
@@ -130,6 +141,19 @@ class QueryPlanIntegrationTest extends AbstractIntegrationTest {
     String plan = planOfList(PaymentFilter.any());
 
     assertTrue(plan.contains("COLLSCAN"), plan);
+  }
+
+  @Test
+  void theCheckForASuccessfulPaymentOfAnOrderUsesAnIndex() {
+    // Order 5 has a SUCCESS payment in the seed. Several indexes can serve this query (the
+    // index of the order, the partial unique one), so only "an index scan" is asserted.
+    List<Document> entries = profiled(() -> repository.hasSuccessfulPayment(5L));
+
+    String plan = firstPlan(entries);
+
+    assertAll(
+      () -> assertTrue(plan.contains("IXSCAN"), plan),
+      () -> assertFalse(plan.contains("COLLSCAN"), plan));
   }
 
   @Test
