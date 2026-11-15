@@ -3,16 +3,16 @@
 Payment microservice of the course e-commerce application (Innowise Java Advanced). Part of a
 system with the Authentication Service, the API Gateway, the User Service and the Order Service.
 
-> Work in progress: the database schema (JACAG-21) and the DAO layer (JACAG-22) are done. The
-> service layer, the REST API, Kafka, the container setup and the CI pipeline follow
-> (JACAG-23 to JACAG-28).
+> Work in progress: the database schema (JACAG-21), the DAO layer (JACAG-22) and the service
+> layer (JACAG-23) are done. The REST API, Kafka, the container setup and the CI pipeline follow.
 
 ## Stack
 
 - Java 21, Spring Boot 4.1.1 (Spring MVC, Spring Data MongoDB)
 - MongoDB 8 with Liquibase migrations (extension `liquibase-mongodb`)
+- Bean Validation, MapStruct, `RestClient` for the call to the random number service
 - Log4j2 (SLF4J API in the code)
-- JUnit 5, Testcontainers
+- JUnit 5, Mockito, WireMock, Testcontainers
 
 ## Requirements
 
@@ -33,6 +33,7 @@ every default.
 | `MONGO_PORT` | `27017` | MongoDB port |
 | `MONGO_DB` | `payment_service_db` | database name |
 | `MONGO_AUTH_DB` | `admin` | database in which the user was created |
+| `RANDOM_API_URI` | `https://www.random.org` | address of the random number service |
 | `SERVER_PORT` | `8084` | HTTP port |
 | `LOG_DIR` | `logs` | folder of the log files |
 
@@ -111,7 +112,7 @@ in `PaymentQueries` (implemented by `PaymentQueriesImpl`).
 - **Stable pages.** The id is always the last sort key, so equal sort values cannot make pages
   overlap or skip a payment. Which properties a client may sort by is decided by the controller.
 
-Known limits:
+Known limits of the data access:
 
 - A list without any filter reads the whole collection and sorts it in memory (no index starts
   with the time). Lists with a filter use the indexes: the test `QueryPlanIntegrationTest`
@@ -120,6 +121,67 @@ Known limits:
   one user or one order.
 - Writing to the database and then to Kafka are two steps (JACAG-24); the insert is not
   undone if the event cannot be sent.
+
+## Service layer
+
+`PaymentService` is a plain class without `@Transactional`: a payment is one document, which
+MongoDB stores atomically, and nothing in the service needs a multi-document transaction.
+
+**Paying an order** (`create`), in this order:
+
+1. The order is checked: if it already has a `SUCCESS` payment the request is refused
+   (`OrderAlreadyPaidException`, 409 in the API) and the random number service is not asked.
+   Without this check a second payment that comes out `FAILED` would be saved, because the
+   unique index covers only `SUCCESS`: the same request would sometimes be a 409 and sometimes a
+   saved `FAILED` payment.
+2. `RandomNumberClient` asks the random number service for one integer from 1 to 100. If the
+   service does not connect or answer in time, nothing is saved (`RandomNumberTimeoutException`,
+   504); if it fails in any other way or answers with something that is not one integer
+   (`RandomNumberUnavailableException`, 502). There is no retry and no circuit breaker.
+3. An even number is `SUCCESS`, an odd one `FAILED`. A declined payment is a normal result and
+   is saved too.
+4. The payment gets the time of the application clock, taken after the number arrived, and is
+   inserted. The unique index has the last word when two requests for one order arrive together:
+   the loser gets the same `OrderAlreadyPaidException`.
+
+The payer is the profile id of the caller and never comes from the request body; the same goes
+for the outcome and the time. The service does not check the order or the amount against the
+Order Service: the Order Service does that when it receives the event (JACAG-24).
+
+| Method | What it does |
+|---|---|
+| `create(Caller, PaymentRequest)` | pays an order, see above |
+| `getById(String, Caller)` | the payer or an admin; a payment of somebody else is the same `PaymentNotFoundException` as a missing one |
+| `findAll(PaymentFilter, Pageable)` | every payment that matches the filter (for admins) |
+| `findOwn(long, PaymentFilter, Pageable)` | the same, but the payer of the filter is replaced by the given user |
+| `totalOfUser(long, Instant, Instant)` | the total of the successful payments of a user in `[from, before)` |
+| `totalOfAll(Instant, Instant)` | the same for all users (for admins) |
+
+- **DTOs and MapStruct.** `PaymentRequest` has only `orderId` and `amount` (at least 0.01, two
+  decimal places at most, ten integer digits at most: the largest total of an order). `Payment`
+  has no setters, so MapStruct builds it through its constructor; the payer, the outcome and the
+  time are separate parameters of `PaymentMapper.toEntity`, so a request body cannot set them.
+- **Totals.** The bounds are cut to milliseconds (all that MongoDB keeps) before they are
+  compared, and the cut bounds are returned in the answer. Two bounds that differ only below a
+  millisecond are an empty period (`InvalidPeriodException`, 400 in the API).
+- **The random number service** is the legacy HTTP interface of random.org
+  (`GET /integers/?num=1&min=1&max=100&col=1&base=10&format=plain&rnd=new`). Its address is
+  `RANDOM_API_URI`; connect and read timeouts are 2 s and 5 s. It is a public service with a
+  quota per address, so the tests never call it: they play it with WireMock. The answers of a
+  failed call never contain its address or its body.
+- **Constant error texts.** `PaymentNotFoundException` does not repeat the id from the URL.
+
+Known limits of the service layer:
+
+- **The order is not checked.** Payment does not ask the Order Service whether the order exists,
+  belongs to the caller or costs that amount. Any user can create a `SUCCESS` payment for any
+  order id. The Order Service leaves such an order unpaid (it compares the user and the amount
+  of the event), but the unique index then refuses the real owner's payment of that order. The
+  fix is a check of the order through an internal endpoint of the Order Service.
+- A payment whose answer is lost and is sent again creates a second payment (or a 409 if the
+  first one was a `SUCCESS`).
+- The random number service is a public service with a quota: when it is down or refuses, every
+  payment is a 502 or 504.
 
 ## Tests
 
@@ -130,6 +192,19 @@ Known limits:
 The integration tests start a MongoDB container with Testcontainers (Docker must run). They
 share one Spring context and one container. `QueryPlanIntegrationTest` switches the profiler of
 MongoDB on for the time of a query to read its plan.
+
+The unit tests of the service layer need no Docker (`-DexcludedGroups=integration` skips the
+integration tests):
+
+| Tests | What they prove |
+|---|---|
+| `PaymentServiceTest` | Mockito, a fixed clock: the parity rule, the payer, the time and the scale of the amount, the order that is already paid (the random number service is not asked), both kinds of duplicate key, a failing random number service saves nothing, ownership, the forced owner of a list, the periods |
+| `RandomNumberClientTest` | WireMock: the request on the wire, every usable and unusable answer, every error status, broken connections, a refused connection, a timeout |
+| `PaymentMapperTest`, `PaymentRequestValidationTest`, `RandomApiPropertiesTest`, `ClockConfigTest`, `CallerTest`, `PaymentFilterTest` | the pieces on their own |
+| `PaymentSuccessCheckIntegrationTest`, `QueryPlanIntegrationTest` | the check for a successful payment against a real MongoDB, and that it uses an index |
+
+The service against a real MongoDB, a real HTTP server for the random number service and Kafka
+is covered by the integration tests of JACAG-26.
 
 ## Troubleshooting
 

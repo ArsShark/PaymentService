@@ -19,4 +19,19 @@ public record PaymentFilter(Long userId, Long orderId, PaymentStatus status) {
   public static PaymentFilter any() {
     return new PaymentFilter(null, null, null);
   }
+
+  /**
+   * Returns the same filter with the payer set, whatever it was before. The service uses it to
+   * force the owner into the list of a user: a user may not look at the payments of somebody
+   * else by putting another {@code userId} into the filter.
+   *
+   * <p>The user is a primitive {@code long} on purpose: a {@code null} would remove the
+   * condition and show the payments of everybody.
+   *
+   * @param userId the payer
+   * @return a new filter; this one is not changed
+   */
+  public PaymentFilter withUserId(long userId) {
+    return new PaymentFilter(userId, orderId, status);
+  }
 }

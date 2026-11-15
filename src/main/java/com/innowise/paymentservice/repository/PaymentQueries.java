@@ -53,6 +53,20 @@ public interface PaymentQueries {
   Page<Payment> findAll(PaymentFilter filter, Pageable pageable);
 
   /**
+   * Tells whether an order already has a payment with the status {@code SUCCESS}.
+   *
+   * <p>The service asks before it calls the random number service: an order that is paid is
+   * refused at once, always in the same way, whatever number the service would have returned
+   * (a second payment that would come out {@code FAILED} is not stopped by the unique index,
+   * which covers only {@code SUCCESS}). The answer is not a guarantee: two requests that arrive
+   * together can both get {@code false}. The unique index decides then, see {@link #insert}.
+   *
+   * @param orderId the id of the order
+   * @return {@code true} if a successful payment of the order exists
+   */
+  boolean hasSuccessfulPayment(long orderId);
+
+  /**
    * Adds up the successful payments of one user in a period.
    *
    * <p>Only payments with the status {@code SUCCESS} count: a declined payment moved no money.

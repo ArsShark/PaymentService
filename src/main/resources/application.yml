@@ -20,3 +20,9 @@ spring:
       auto-index-creation: false
 server:
   port: ${SERVER_PORT:8084}
+app:
+  random-api:
+    # The random number service that decides a payment (even: SUCCESS, odd: FAILED). It is the
+    # same in every environment, so unlike the addresses of the other services of the system the
+    # default is here and not in a profile file. Tests and a local stand-in replace it.
+    base-uri: ${RANDOM_API_URI:https://www.random.org}
