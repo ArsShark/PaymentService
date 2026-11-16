@@ -70,6 +70,19 @@
       </exclusions>
     </dependency>
     <dependency>
+      <!-- Spring for Apache Kafka with the auto-configuration of Spring Boot 4: KafkaTemplate,
+           KafkaAdmin (creates the topics that are declared as beans). The JSON serializer of
+           the events is part of it and uses the Jackson 3 that Spring MVC already brings. -->
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-kafka</artifactId>
+      <exclusions>
+        <exclusion>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-starter-logging</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
       <!-- Only the core library: Spring Boot has no Liquibase auto-configuration for MongoDB
            (SpringLiquibase needs a JDBC DataSource), so MongoMigration runs it by hand. -->
       <groupId>org.liquibase</groupId>
