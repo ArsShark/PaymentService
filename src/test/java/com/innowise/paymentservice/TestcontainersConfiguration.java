@@ -1,14 +1,17 @@
 package com.innowise.paymentservice;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.test.context.DynamicPropertyRegistrar;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
- * Starts a MongoDB container for the tests and tells the application where it is.
+ * Starts a MongoDB container and a Kafka container for the tests and tells the application where
+ * they are.
  *
  * <p>The container is a standalone server with authentication, like the one of
  * {@code docker-compose.yml}, so the tests use the same credentials path as the real
@@ -51,7 +54,8 @@ public class TestcontainersConfiguration {
    * @return the registrar that Spring calls when it builds the environment
    */
   @Bean
-  DynamicPropertyRegistrar mongoProperties(GenericContainer<?> mongoContainer) {
+  DynamicPropertyRegistrar mongoProperties(
+    @Qualifier("mongoContainer") GenericContainer<?> mongoContainer) {
     return registry -> {
       registry.add("spring.mongodb.host", mongoContainer::getHost);
       registry.add("spring.mongodb.port", () -> mongoContainer.getMappedPort(MONGO_PORT));
@@ -60,5 +64,29 @@ public class TestcontainersConfiguration {
       registry.add("spring.mongodb.password", () -> PASSWORD);
       registry.add("spring.mongodb.authentication-database", () -> "admin");
     };
+  }
+
+  /**
+   * A single Kafka broker in KRaft mode, the same image as {@code docker-compose.yml}. Unlike the
+   * Compose file this container creates topics automatically; the topic that the application
+   * declares is created by {@code KafkaAdmin} before the first test.
+   *
+   * @return the container
+   */
+  @Bean
+  KafkaContainer kafkaContainer() {
+    return new KafkaContainer(DockerImageName.parse("apache/kafka:4.2.0"));
+  }
+
+  /**
+   * Gives the application the address of the broker, through the property that production uses.
+   *
+   * @param kafkaContainer the started container
+   * @return the registrar that Spring calls when it builds the environment
+   */
+  @Bean
+  DynamicPropertyRegistrar kafkaProperties(KafkaContainer kafkaContainer) {
+    return registry -> registry.add("spring.kafka.bootstrap-servers",
+      kafkaContainer::getBootstrapServers);
   }
 }
