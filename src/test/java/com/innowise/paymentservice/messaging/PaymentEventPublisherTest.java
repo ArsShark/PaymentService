@@ -66,8 +66,11 @@ class PaymentEventPublisherTest {
 
   @Test
   void theEventIsSentToThePaymentEventsTopicWithTheOrderIdAsKey() {
+    // The answer is built BEFORE the outer stubbing: Mockito does not allow stubbing a mock
+    // (here the metadata of the answer) while the arguments of another "when" are evaluated.
+    SendResult<String, PaymentEvent> answer = acknowledged();
     when(kafkaTemplate.send(anyString(), anyString(), any(PaymentEvent.class)))
-      .thenReturn(CompletableFuture.completedFuture(acknowledged()));
+      .thenReturn(CompletableFuture.completedFuture(answer));
 
     publisher.publish(PAYMENT);
 
