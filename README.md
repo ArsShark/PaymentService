@@ -3,13 +3,15 @@
 Payment microservice of the course e-commerce application (Innowise Java Advanced). Part of a
 system with the Authentication Service, the API Gateway, the User Service and the Order Service.
 
-> Work in progress: the database schema (JACAG-21), the DAO layer (JACAG-22) and the service
-> layer (JACAG-23) are done. The REST API, Kafka, the container setup and the CI pipeline follow.
+> Work in progress: the database schema (JACAG-21), the DAO layer (JACAG-22), the service layer
+> (JACAG-23) and the Kafka producer (JACAG-24, the consumer is in the Order Service) are done.
+> The REST API, the container setup and the CI pipeline follow.
 
 ## Stack
 
 - Java 21, Spring Boot 4.1.1 (Spring MVC, Spring Data MongoDB)
 - MongoDB 8 with Liquibase migrations (extension `liquibase-mongodb`)
+- Apache Kafka 4 (KRaft, Spring for Apache Kafka): the event of every payment, JSON
 - Bean Validation, MapStruct, `RestClient` for the call to the random number service
 - Log4j2 (SLF4J API in the code)
 - JUnit 5, Mockito, WireMock, Testcontainers
@@ -17,7 +19,7 @@ system with the Authentication Service, the API Gateway, the User Service and th
 ## Requirements
 
 - JDK 21
-- Docker (the tests and the local MongoDB)
+- Docker (the tests, the local MongoDB and the local Kafka)
 - Maven Wrapper is included in the project
 
 ## Configuration
@@ -33,6 +35,8 @@ every default.
 | `MONGO_PORT` | `27017` | MongoDB port |
 | `MONGO_DB` | `payment_service_db` | database name |
 | `MONGO_AUTH_DB` | `admin` | database in which the user was created |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | address of the Kafka broker (profile `local`) |
+| `KAFKA_PORT` | `9092` | only for Docker Compose: the port that Kafka publishes on `127.0.0.1` |
 | `RANDOM_API_URI` | `https://www.random.org` | address of the random number service |
 | `SERVER_PORT` | `8084` | HTTP port |
 | `LOG_DIR` | `logs` | folder of the log files |
@@ -40,13 +44,18 @@ every default.
 Credentials are never stored in the repository. The application is configured with host, port
 and database, not with `spring.mongodb.uri`: the Liquibase migration reads the same settings.
 
-## Run MongoDB locally
+## Run MongoDB and Kafka locally
 
 ```
 copy .env.example .env      # then set real values in .env
 docker compose up -d
-docker compose ps           # the status of mongodb becomes "healthy"
+docker compose ps           # the status of mongodb and kafka becomes "healthy"
 ```
+
+The first start downloads the Kafka image (about 700 MB). Kafka has no volume: `docker compose
+down` removes its topics, and the application declares them again when it starts. It is
+published only on `127.0.0.1:9092`. If you change `KAFKA_PORT`, set `KAFKA_BOOTSTRAP_SERVERS`
+to the same port.
 
 The user is created on the FIRST start, when the volume is empty. Changing `MONGO_PASSWORD`
 afterwards changes nothing in MongoDB; reset it with `docker compose down -v`, which deletes the
@@ -119,8 +128,8 @@ Known limits of the data access:
   reads the plan that the server recorded for the real command. The id as the last sort key
   means MongoDB also sorts the matching payments in memory; that is cheap for the payments of
   one user or one order.
-- Writing to the database and then to Kafka are two steps (JACAG-24); the insert is not
-  undone if the event cannot be sent.
+- Writing to the database and then to Kafka are two steps; the insert is not undone if the
+  event cannot be sent (see "Kafka" below).
 
 ## Service layer
 
@@ -143,10 +152,13 @@ MongoDB stores atomically, and nothing in the service needs a multi-document tra
 4. The payment gets the time of the application clock, taken after the number arrived, and is
    inserted. The unique index has the last word when two requests for one order arrive together:
    the loser gets the same `OrderAlreadyPaidException`.
+5. The event `CREATE_PAYMENT` with the outcome is sent to Kafka (see "Kafka" below), also for a
+   `FAILED` payment. This step cannot undo the payment: a Kafka outage does not fail the
+   request.
 
 The payer is the profile id of the caller and never comes from the request body; the same goes
 for the outcome and the time. The service does not check the order or the amount against the
-Order Service: the Order Service does that when it receives the event (JACAG-24).
+Order Service: the Order Service does that when it receives the event.
 
 | Method | What it does |
 |---|---|
@@ -183,14 +195,72 @@ Known limits of the service layer:
 - The random number service is a public service with a quota: when it is down or refuses, every
   payment is a 502 or 504.
 
+## Kafka
+
+After a payment is saved, the service sends the event `CREATE_PAYMENT` to the topic
+`payment-events`; the Order Service reads it and moves the order to `PAID` or `PAYMENT_FAILED`.
+
+| | |
+|---|---|
+| Topic | `payment-events`: 3 partitions, 1 replica (one broker). Declared by this service (`KafkaTopicConfig`) and created by Spring when the application starts. The broker has automatic topic creation switched off. |
+| Key | the order id as text. Kafka orders records only inside a partition, and the key decides the partition: all events of one order stay together and are read in the order they were sent. |
+| Value | JSON, no Java type header (each service has its own class for the event) |
+
+```json
+{
+  "eventId": "4d1f8f3e-0c0b-3b52-9c7e-1f6a2d9b7a10",
+  "eventType": "CREATE_PAYMENT",
+  "paymentId": "65f0c0ffee0123456789abcd",
+  "orderId": 5,
+  "userId": 7,
+  "status": "SUCCESS",
+  "amount": "24.00",
+  "occurredAt": "2026-11-16T10:00:00.123Z"
+}
+```
+
+- `eventId` is a name-based UUID of the event type and the payment id, so it is the same every
+  time for one payment. `occurredAt` is the time of the payment. `amount` is text with two
+  decimal places: a JSON number could pass through a `double` in a reader and lose its scale.
+- The contract is pinned by `PaymentEventPublisherIntegrationTest`, which reads the record back
+  from a real broker. The Order Service has the same JSON in its tests.
+- **Producer settings** (`application.yml`): `acks=all` and an idempotent producer (a retry of
+  the producer never writes a record twice); `max.block.ms` 2 s, `request.timeout.ms` 5 s,
+  `delivery.timeout.ms` 30 s.
+- **The send is asynchronous.** The HTTP thread waits only for the metadata of the topic (at most
+  `max.block.ms`), never for the delivery. The outcome is logged by the callback: INFO with the
+  partition and the offset, or ERROR `Event of payment ... NOT published`.
+
+How to look at it by hand (PowerShell, the stack of this README is running):
+
+```
+docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic payment-events
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic payment-events --from-beginning --property print.key=true --property print.partition=true --property print.offset=true
+```
+
+Known limits of the events:
+
+- **Saving the payment and sending its event are two steps in two systems.** MongoDB and Kafka
+  cannot take part in one transaction, and there is no outbox. If Kafka cannot be reached, the
+  payment stays saved, the client gets 201, and the event is lost (ERROR in the log with the
+  payment id and the order id). A lost `SUCCESS` event leaves the order `PENDING`, and a second
+  payment of that order is refused (409): repair the order by hand. A lost `FAILED` event is
+  harmless. The event is lost when Kafka is down at the first send after the start of the
+  application (the send gives up after 2 s), when it stays down for longer than 30 s, or when the
+  application stops before the producer has sent the record. A light outbox (a flag on the
+  payment and a relay) would close the gap.
+- The producer retries a record by itself and is idempotent, so a retry never writes it twice.
+  Even so the Order Service reads an event at least once: a crash before it commits its offset
+  makes it read the same event again, so it must handle a repeated event idempotently.
+
 ## Tests
 
 ```
 .\mvnw test
 ```
 
-The integration tests start a MongoDB container with Testcontainers (Docker must run). They
-share one Spring context and one container. `QueryPlanIntegrationTest` switches the profiler of
+The integration tests start a MongoDB container and a Kafka container with Testcontainers
+(Docker must run). They share one Spring context and the two containers. `QueryPlanIntegrationTest` switches the profiler of
 MongoDB on for the time of a query to read its plan.
 
 The unit tests of the service layer need no Docker (`-DexcludedGroups=integration` skips the
@@ -200,11 +270,15 @@ integration tests):
 |---|---|
 | `PaymentServiceTest` | Mockito, a fixed clock: the parity rule, the payer, the time and the scale of the amount, the order that is already paid (the random number service is not asked), both kinds of duplicate key, a failing random number service saves nothing, ownership, the forced owner of a list, the periods |
 | `RandomNumberClientTest` | WireMock: the request on the wire, every usable and unusable answer, every error status, broken connections, a refused connection, a timeout |
+| `PaymentEventMapperTest` | the event of a payment: the facts, the amount as text with two decimal places, the stable event id |
+| `PaymentEventPublisherTest` | Mockito: topic, key and value of the send; no failure of Kafka (at once or later) or of the mapping reaches the caller |
 | `PaymentMapperTest`, `PaymentRequestValidationTest`, `RandomApiPropertiesTest`, `ClockConfigTest`, `CallerTest`, `PaymentFilterTest` | the pieces on their own |
 | `PaymentSuccessCheckIntegrationTest`, `QueryPlanIntegrationTest` | the check for a successful payment against a real MongoDB, and that it uses an index |
+| `KafkaTopicIntegrationTest` | the application creates `payment-events` with 3 partitions and 1 replica |
+| `PaymentEventPublisherIntegrationTest` | the record on a real broker: key, no Java type header, the JSON of the contract; the events of one order stay in one partition in order |
 
-The service against a real MongoDB, a real HTTP server for the random number service and Kafka
-is covered by the integration tests of JACAG-26.
+The service against a real MongoDB, a real HTTP server for the random number service, the log
+line of a lost event and a Kafka that is down are covered by the integration tests of JACAG-26.
 
 ## Troubleshooting
 
@@ -213,4 +287,6 @@ is covered by the integration tests of JACAG-26.
 | `Could not resolve placeholder 'MONGO_USERNAME'` | there is no `.env` in the working directory of the run (the IDE must run in the project folder) and the variable is not set |
 | `Authentication failed` | the user was created with other values: `docker compose down -v` and start again |
 | `Applying the MongoDB changelog failed: ... timed out` | MongoDB is not running or the port is different |
+| `Connection to node -1 (localhost/127.0.0.1:9092) could not be established` in the log | Kafka is not running (`docker compose up -d`) or `KAFKA_BOOTSTRAP_SERVERS` points to another port. The application still starts; the topic is created at the next start |
+| ERROR `Event of payment ... NOT published (TimeoutException)` | Kafka was not reachable, or the topic does not exist (Kafka was started after the application, or `docker compose down` removed it: restart the application). The payment is saved. Start Kafka, and tell the Order Service about the payment by hand if it matters |
 | The first changeSet fails because the collection `payments` already exists | The collection was created by hand (for example by an `insertMany` in `mongosh`) before the application first started, so it has no validator and no indexes. `db.payments.drop()` in `mongosh` and start the application again, or `docker compose down -v` |
