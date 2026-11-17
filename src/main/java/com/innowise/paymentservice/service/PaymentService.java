@@ -11,6 +11,7 @@ import com.innowise.paymentservice.exception.OrderAlreadyPaidException;
 import com.innowise.paymentservice.exception.PaymentNotFoundException;
 import com.innowise.paymentservice.exception.ViolatedIndex;
 import com.innowise.paymentservice.mapper.PaymentMapper;
+import com.innowise.paymentservice.messaging.PaymentEventPublisher;
 import com.innowise.paymentservice.repository.PaymentFilter;
 import com.innowise.paymentservice.repository.PaymentRepository;
 import com.innowise.paymentservice.repository.PaymentTotal;
@@ -43,13 +44,16 @@ public class PaymentService {
   private final PaymentRepository paymentRepository;
   private final RandomNumberClient randomNumberClient;
   private final PaymentMapper paymentMapper;
+  private final PaymentEventPublisher eventPublisher;
   private final Clock clock;
 
   public PaymentService(PaymentRepository paymentRepository,
-    RandomNumberClient randomNumberClient, PaymentMapper paymentMapper, Clock clock) {
+    RandomNumberClient randomNumberClient, PaymentMapper paymentMapper,
+    PaymentEventPublisher eventPublisher, Clock clock) {
     this.paymentRepository = paymentRepository;
     this.randomNumberClient = randomNumberClient;
     this.paymentMapper = paymentMapper;
+    this.eventPublisher = eventPublisher;
     this.clock = clock;
   }
 
@@ -61,9 +65,14 @@ public class PaymentService {
    * <p>Steps, in this order: (1) an order that is already paid is refused, so the random number
    * service is not asked and the refusal is the same whatever number it would have returned;
    * (2) the number; (3) the payment with the time of the clock, made after the number arrived;
-   * (4) the insert. A failure in step 2 saves nothing. The check of step 1 is not a guarantee
+   * (4) the insert; (5) the event {@code CREATE_PAYMENT} with the outcome, for the Order Service.
+   * A failure in step 2 saves nothing and sends nothing. The check of step 1 is not a guarantee
    * (two requests can pass it together), so the unique index of the database has the last word
    * in step 4.
+   *
+   * <p>Step 5 comes after the payment is saved and cannot undo it: the publisher never throws,
+   * so a Kafka outage does not fail the request. The event is then lost and logged at ERROR
+   * (see {@link PaymentEventPublisher}). A declined payment ({@code FAILED}) sends its event too.
    *
    * <p>The payer comes from the caller, never from the request. The service does not check the
    * order or the amount against the Order Service: that is done by the Order Service when it
@@ -91,6 +100,7 @@ public class PaymentService {
     Payment saved = insert(payment);
     LOGGER.info("Created payment {} of order {} by user {} with status {}", saved.getId(),
       saved.getOrderId(), saved.getUserId(), saved.getStatus());
+    eventPublisher.publish(saved);
     return paymentMapper.toResponse(saved);
   }
 

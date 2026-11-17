@@ -1,6 +1,6 @@
-# Local infrastructure of the Payment Service. For now only MongoDB: the application runs on
-# the host (IDE or .\mvnw spring-boot:run). Kafka (JACAG-24) and the application (JACAG-27)
-# are added by later tasks.
+# Local infrastructure of the Payment Service: MongoDB and Kafka. The application runs on the
+# host (IDE or .\mvnw spring-boot:run). The application itself (JACAG-27) is added by a later
+# task; the Compose file of the whole system lives in the Infrastructure repository.
 name: payment-service
 
 services:
@@ -27,6 +27,50 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+
+  kafka:
+    # One broker in KRaft mode: this single process is both the broker and the controller, there
+    # is no ZooKeeper. The image reads every KAFKA_* variable into its configuration and a
+    # variable replaces the default, so the set below is complete on purpose.
+    image: apache/kafka:4.2.0
+    environment:
+      KAFKA_NODE_ID: 1
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+      KAFKA_PROCESS_ROLES: broker,controller
+      # Three listeners. EXTERNAL is for the application on the host (localhost:9092), INTERNAL
+      # is for containers of the same Compose project (kafka:19092), CONTROLLER is the private
+      # port of the KRaft quorum. A client connects to any listener, but then goes to the
+      # ADVERTISED address of that listener, so each address must work for the client that uses
+      # it: "localhost" is the host for the IDE and the container itself inside Compose.
+      KAFKA_LISTENERS: CONTROLLER://:9093,INTERNAL://:19092,EXTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://localhost:${KAFKA_PORT:-9092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      # One broker cannot keep more than one copy of anything, so the internal topics of Kafka
+      # (consumer offsets, transactions) must have one replica, or the broker does not start.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # A topic is created on purpose (by the application), never by a typo in its name.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+    ports:
+      # Only on the loopback interface, like MongoDB. The advertised address above uses the same
+      # port, so a changed KAFKA_PORT works for both.
+      - "127.0.0.1:${KAFKA_PORT:-9092}:9092"
+    # No volume: the data of a development broker is disposable (topics are created again by
+    # the application, the history of the events is not needed). "docker compose down" resets it.
+    healthcheck:
+      # The string form of "test" runs in the shell of the container. The tool exits with an
+      # error while the broker does not answer.
+      test: /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
 
 volumes:
   mongo-data:

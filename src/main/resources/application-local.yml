@@ -11,3 +11,6 @@ spring:
     host: ${MONGO_HOST:localhost}
     port: ${MONGO_PORT:27017}
     database: ${MONGO_DB:payment_service_db}
+  kafka:
+    # The broker of docker-compose.yml, published on the loopback interface.
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}

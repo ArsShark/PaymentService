@@ -18,6 +18,26 @@ spring:
         big-decimal: decimal128
       # Liquibase is the only owner of the indexes; annotations never create one.
       auto-index-creation: false
+  kafka:
+    # The address of the broker is defined per profile (application-local.yml).
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+      # The broker confirms a record only after all in-sync replicas have it. Together with the
+      # idempotent producer this means: a retry of the producer never writes a record twice.
+      acks: all
+      properties:
+        "[enable.idempotence]": true
+        # The limits that matter to a payment request. send() waits at most "max.block.ms" for
+        # the metadata of the topic (this is the only wait on the HTTP thread, the delivery
+        # itself is asynchronous); the producer retries a record in the background for
+        # "delivery.timeout.ms" and then gives up. The producer refuses to start if
+        # delivery.timeout.ms is smaller than linger.ms + request.timeout.ms.
+        "[max.block.ms]": 2000
+        "[request.timeout.ms]": 5000
+        "[delivery.timeout.ms]": 30000
+        # The events carry no Java type: every service has its own class for them.
+        "[spring.json.add.type.headers]": false
 server:
   port: ${SERVER_PORT:8084}
 app:
@@ -26,3 +46,7 @@ app:
     # same in every environment, so unlike the addresses of the other services of the system the
     # default is here and not in a profile file. Tests and a local stand-in replace it.
     base-uri: ${RANDOM_API_URI:https://www.random.org}
+logging:
+  level:
+    # The Kafka client logs every configuration value at INFO, again for every client.
+    org.apache.kafka: WARN

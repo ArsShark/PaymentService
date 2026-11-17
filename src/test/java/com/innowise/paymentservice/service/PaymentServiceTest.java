@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -25,6 +26,7 @@ import com.innowise.paymentservice.exception.PaymentNotFoundException;
 import com.innowise.paymentservice.exception.RandomNumberTimeoutException;
 import com.innowise.paymentservice.exception.RandomNumberUnavailableException;
 import com.innowise.paymentservice.mapper.PaymentMapperImpl;
+import com.innowise.paymentservice.messaging.PaymentEventPublisher;
 import com.innowise.paymentservice.repository.PaymentFilter;
 import com.innowise.paymentservice.repository.PaymentRepository;
 import com.innowise.paymentservice.repository.PaymentTotal;
@@ -43,6 +45,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DuplicateKeyException;
@@ -86,12 +89,15 @@ class PaymentServiceTest {
   @Mock
   private RandomNumberClient randomNumberClient;
 
+  @Mock
+  private PaymentEventPublisher eventPublisher;
+
   private PaymentService service;
 
   @BeforeEach
   void createService() {
     service = new PaymentService(paymentRepository, randomNumberClient, new PaymentMapperImpl(),
-      Clock.fixed(NOW, ZoneOffset.UTC));
+      eventPublisher, Clock.fixed(NOW, ZoneOffset.UTC));
   }
 
   /** The error of MongoDB for a violated unique index, with the text that names the index. */
@@ -163,6 +169,36 @@ class PaymentServiceTest {
   }
 
   @Test
+  void theEventIsSentAfterTheInsertAndCarriesTheSavedPayment() {
+    stubFreeOrderAndNumber(42L);
+    stubInsertAssigningAnId();
+
+    service.create(PAYER, request("24.00"));
+
+    InOrder order = inOrder(paymentRepository, eventPublisher);
+    ArgumentCaptor<Payment> sent = ArgumentCaptor.forClass(Payment.class);
+    order.verify(paymentRepository).insert(any());
+    order.verify(eventPublisher).publish(sent.capture());
+    assertAll(
+      () -> assertEquals(PAYMENT_ID, sent.getValue().getId()),
+      () -> assertEquals(ORDER_ID, sent.getValue().getOrderId()),
+      () -> assertEquals(7L, sent.getValue().getUserId()),
+      () -> assertEquals(PaymentStatus.SUCCESS, sent.getValue().getStatus()));
+  }
+
+  @Test
+  void aDeclinedPaymentSendsItsEventToo() {
+    stubFreeOrderAndNumber(7L);
+    stubInsertAssigningAnId();
+
+    service.create(PAYER, request("24.00"));
+
+    ArgumentCaptor<Payment> sent = ArgumentCaptor.forClass(Payment.class);
+    verify(eventPublisher).publish(sent.capture());
+    assertEquals(PaymentStatus.FAILED, sent.getValue().getStatus());
+  }
+
+  @Test
   void anAdminWithAProfilePaysAsHimself() {
     stubFreeOrderAndNumber(3L);
     stubInsertAssigningAnId();
@@ -179,7 +215,7 @@ class PaymentServiceTest {
     assertThrows(NullPointerException.class,
       () -> service.create(new Caller(null, true), request("24.00")));
 
-    verifyNoInteractions(paymentRepository, randomNumberClient);
+    verifyNoInteractions(paymentRepository, randomNumberClient, eventPublisher);
   }
 
   @Test
@@ -192,7 +228,8 @@ class PaymentServiceTest {
     assertAll(
       () -> assertEquals("Order 5 is already paid", thrown.getMessage()),
       () -> verifyNoInteractions(randomNumberClient),
-      () -> verify(paymentRepository, never()).insert(any()));
+      () -> verify(paymentRepository, never()).insert(any()),
+      () -> verifyNoInteractions(eventPublisher));
   }
 
   @Test
@@ -206,7 +243,8 @@ class PaymentServiceTest {
     assertAll(
       () -> assertEquals("Order 5 is already paid", thrown.getMessage()),
       () -> assertFalse(thrown.getMessage().contains("dup key")),
-      () -> assertNull(thrown.getCause()));
+      () -> assertNull(thrown.getCause()),
+      () -> verifyNoInteractions(eventPublisher));
   }
 
   @Test
@@ -218,7 +256,9 @@ class PaymentServiceTest {
     DuplicateKeyException thrown = assertThrows(DuplicateKeyException.class,
       () -> service.create(PAYER, request("24.00")));
 
-    assertSame(other, thrown);
+    assertAll(
+      () -> assertSame(other, thrown),
+      () -> verifyNoInteractions(eventPublisher));
   }
 
   @Test
@@ -239,7 +279,9 @@ class PaymentServiceTest {
 
     assertSame(failure, assertThrows(RandomNumberUnavailableException.class,
       () -> service.create(PAYER, request("24.00"))));
-    verify(paymentRepository, never()).insert(any());
+    assertAll(
+      () -> verify(paymentRepository, never()).insert(any()),
+      () -> verifyNoInteractions(eventPublisher));
   }
 
   @Test
@@ -250,7 +292,9 @@ class PaymentServiceTest {
 
     assertSame(failure, assertThrows(RandomNumberTimeoutException.class,
       () -> service.create(PAYER, request("24.00"))));
-    verify(paymentRepository, never()).insert(any());
+    assertAll(
+      () -> verify(paymentRepository, never()).insert(any()),
+      () -> verifyNoInteractions(eventPublisher));
   }
 
   // ---- getById
