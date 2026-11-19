@@ -41,6 +41,9 @@ spring:
 server:
   port: ${SERVER_PORT:8084}
 app:
+  security:
+    # Must equal the issuer of the Authentication Service (JWT_ISSUER there).
+    jwt-issuer: ${JWT_ISSUER:authentication-service}
   random-api:
     # The random number service that decides a payment (even: SUCCESS, odd: FAILED). It is the
     # same in every environment, so unlike the addresses of the other services of the system the
