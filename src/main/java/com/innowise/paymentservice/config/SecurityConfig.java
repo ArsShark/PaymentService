@@ -5,6 +5,7 @@ import jakarta.servlet.DispatcherType;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -48,6 +49,9 @@ import org.springframework.web.servlet.HandlerExceptionResolver;
 @EnableMethodSecurity
 public class SecurityConfig {
 
+  private static final String ADMIN = "ADMIN";
+  private static final String USER = "USER";
+
   /**
    * Builds the one security filter chain of the service.
    *
@@ -84,6 +88,16 @@ public class SecurityConfig {
           .jwtAuthenticationConverter(jwtConverter)))
       .authorizeHttpRequests(requests -> requests
         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+        // The list and the total of everybody's payments are for an admin. These rules must
+        // stay before the one for "/api/payments/*", which would match "/total" as an id.
+        .requestMatchers(HttpMethod.GET, "/api/payments", "/api/payments/total")
+        .hasRole(ADMIN)
+        .requestMatchers(HttpMethod.POST, "/api/payments").hasAnyRole(ADMIN, USER)
+        // The rest is open to both roles; the service decides whose payment it is (a payment
+        // of somebody else is a 404). A payment never changes: no other method is opened.
+        .requestMatchers(HttpMethod.GET, "/api/payments/my", "/api/payments/my/total")
+        .hasAnyRole(ADMIN, USER)
+        .requestMatchers(HttpMethod.GET, "/api/payments/*").hasAnyRole(ADMIN, USER)
         .anyRequest().denyAll())
       .build();
   }
