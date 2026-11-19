@@ -1,0 +1,19 @@
+package com.innowise.paymentservice.exception;
+
+import java.util.Set;
+import java.util.TreeSet;
+
+/** Thrown when a request asks to sort by a property that is not part of the API. */
+public class InvalidSortPropertyException extends RuntimeException {
+
+  /**
+   * Creates the exception. The rejected property is deliberately left out of the message: it is
+   * client input and the message is logged.
+   *
+   * @param allowedProperties properties the client may sort by
+   */
+  public InvalidSortPropertyException(Set<String> allowedProperties) {
+    super(String.format("Unsupported sort property. Allowed properties: %s",
+      new TreeSet<>(allowedProperties)));
+  }
+}
