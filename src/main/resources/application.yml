@@ -11,6 +11,10 @@ spring:
     password: ${MONGO_PASSWORD}
     authentication-database: ${MONGO_AUTH_DB:admin}
   data:
+    web:
+      pageable:
+        # Spring caps a larger "size" silently; the default size is set per endpoint.
+        max-page-size: 100
     mongodb:
       # Spring Data MongoDB 5 has no default for BigDecimal: it must be chosen. Decimal128 is
       # the numeric type of MongoDB, so amounts can be compared and added up by the database.
@@ -40,7 +44,14 @@ spring:
         "[spring.json.add.type.headers]": false
 server:
   port: ${SERVER_PORT:8084}
+  # The Gateway sends X-Forwarded-*; the Location of a created payment must point to the
+  # address of the client, not to the internal address of this service. The service is
+  # reachable only inside the network, so it may trust these headers.
+  forward-headers-strategy: framework
 app:
+  security:
+    # Must equal the issuer of the Authentication Service (JWT_ISSUER there).
+    jwt-issuer: ${JWT_ISSUER:authentication-service}
   random-api:
     # The random number service that decides a payment (even: SUCCESS, odd: FAILED). It is the
     # same in every environment, so unlike the addresses of the other services of the system the
