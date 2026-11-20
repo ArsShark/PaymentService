@@ -312,7 +312,12 @@ class PaymentControllerTest {
     verify(paymentService).getById(PAYMENT_ID, new Caller(null, true));
   }
 
-  /** The service decides; a missing payment and the payment of somebody else look the same. */
+  /**
+   * The service decides; a missing payment and the payment of somebody else look the same. The
+   * detail is a constant, it does not hold the id. Only {@code instance}, which Spring fills with
+   * the path of the request, repeats the id that the caller sent himself, so the check is on the
+   * detail and not on the whole body.
+   */
   @Test
   void getByIdAnswers404WithAConstantDetail() throws Exception {
     when(paymentService.getById(eq(PAYMENT_ID), any(Caller.class)))
@@ -321,7 +326,8 @@ class PaymentControllerTest {
     mockMvc.perform(get("/api/payments/{id}", PAYMENT_ID).with(user())).andExpectAll(
       status().isNotFound(),
       jsonPath("$.detail").value("Payment not found"),
-      content().string(not(containsString(PAYMENT_ID))));
+      jsonPath("$.detail").value(not(containsString(PAYMENT_ID))),
+      jsonPath("$.instance").value(String.format("/api/payments/%s", PAYMENT_ID)));
   }
 
   // ---- getAll (admin)
