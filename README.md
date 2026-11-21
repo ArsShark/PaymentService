@@ -361,8 +361,43 @@ integration tests):
 | `KafkaTopicIntegrationTest` | the application creates `payment-events` with 3 partitions and 1 replica |
 | `PaymentEventPublisherIntegrationTest` | the record on a real broker: key, no Java type header, the JSON of the contract; the events of one order stay in one partition in order |
 
-The service against a real MongoDB, a real HTTP server for the random number service, the log
-line of a lost event and a Kafka that is down are covered by the integration tests of JACAG-26.
+Through the whole application (real tokens, real MongoDB, real Kafka broker, and a WireMock
+server instead of the random number service, see `RandomApiStub`):
+
+| Tests | What they prove |
+|---|---|
+| `RandomApiStubIntegrationTest` | the shared context talks to the stub and never to the real service; the stub itself (numbers in order, delays, errors, broken connections, a request nobody stubbed is a failure) |
+| `PaymentApiIntegrationTest` | a payment from the request to the document: the parity rule (also below zero and at the limits of a `long`), the stored types and the time of the clock, a failed payment that leaves the order open, a paid order refused before the random number service is asked, a 502 for every kind of failure of the service, a 504 with the real read timeout, invalid bodies and a wrong content type, fields that a client adds are ignored, reading back and totalling what was paid |
+| `PaymentEventFlowIntegrationTest` | the topic is read to its end: the key, no Java type header, the eight fields of the contract, the stable event id, the order of the events of one order; a paid order, a failing random number service, an invalid body and a caller without a profile send no event |
+| `ForwardedHeadersIntegrationTest` | the `Location` of a created payment follows the `X-Forwarded-*` headers of the Gateway |
+| `PaymentConcurrencyIntegrationTest` | eight parallel payments of one order, repeated five times: with the answer delayed so that the unique index decides, exactly one 201, seven 409, one document and one event; with mixed numbers, only what holds whichever way the requests interleave |
+| `ApiSecretsNotLoggedIntegrationTest` | one run with every kind of success and refusal, then no token, email, address of the key set or of the random number service, database password, duplicate key text or value of a refused request is in the log |
+| `KafkaOutageIntegrationTest` | the broker is paused: the payment is answered and saved, the HTTP thread is not held, one line at ERROR level names the payment, the order and the class of the cause; the producer works again after the resume |
+
+`PaymentApiIntegrationTest` (a 504 takes as long as the read timeout, 5 s),
+`ApiSecretsNotLoggedIntegrationTest` (it contains a 504 too) and `KafkaOutageIntegrationTest`
+(the delivery timeout of the producer is 30 s) wait for real timeouts, so the integration tests
+take a few minutes.
+
+### Which test covers which method of the service layer
+
+| Method | Unit tests (`PaymentServiceTest`) | Through the application |
+|---|---|---|
+| `create` | outcome by parity, payer, time, scale, a paid order, both kinds of duplicate key, a failing random number service | `PaymentApiIntegrationTest`, `PaymentEventFlowIntegrationTest`, `PaymentConcurrencyIntegrationTest`, `KafkaOutageIntegrationTest` |
+| `getById` | own, foreign, missing, admin | `ApiSecurityIntegrationTest`, `PaymentApiIntegrationTest` |
+| `findAll`, `findOwn` | the filter, the forced owner | `ApiSecurityIntegrationTest`, `PaymentApiIntegrationTest` |
+| `totalOfUser`, `totalOfAll` | the periods, a missing bound | `ApiSecurityIntegrationTest`, `PaymentApiIntegrationTest` |
+
+### Coverage
+
+```
+.\mvnw clean test "-DexcludedGroups=integration"
+start target\site\jacoco\index.html
+```
+
+The unit tests alone cover the package `service` completely (instructions and branches). Run
+without `-DexcludedGroups=integration` the report also counts what the tests through the
+application cover.
 
 ## Troubleshooting
 
