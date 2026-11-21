@@ -11,6 +11,7 @@ import com.innowise.paymentservice.client.RandomNumberClient;
 import com.innowise.paymentservice.exception.RandomNumberUnavailableException;
 import java.time.Duration;
 import java.util.List;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -87,6 +88,35 @@ class RandomApiStubIntegrationTest extends AbstractIntegrationTest {
     RandomApiStub.answersInOrder(0, 7);
 
     assertEquals(List.of(7L, 7L), List.of(client.nextNumber(), client.nextNumber()));
+  }
+
+  /** The numbers of a stub without state: always numbers, and a mix of even and odd. */
+  @Test
+  void randomNumbersAreNumbersOfBothParities() {
+    RandomApiStub.answersWithRandomNumbers(0);
+
+    List<Long> numbers = IntStream.range(0, 40).mapToObj(i -> client.nextNumber()).toList();
+
+    assertAll(
+      () -> assertEquals(40, RandomApiStub.requestCount()),
+      () -> assertTrue(numbers.stream().anyMatch(number -> number % 2 == 0), "no even number"),
+      () -> assertTrue(numbers.stream().anyMatch(number -> number % 2 != 0), "no odd number"));
+  }
+
+  /**
+   * Simultaneous requests all get an answer: this is what a scenario could not do. The requests
+   * come from the common pool, so they overlap.
+   */
+  @Test
+  void simultaneousRequestsAllGetANumber() {
+    RandomApiStub.answersWithRandomNumbers(100);
+
+    List<Long> numbers = IntStream.range(0, 32).parallel()
+      .mapToObj(i -> client.nextNumber()).toList();
+
+    assertAll(
+      () -> assertEquals(32, numbers.size()),
+      () -> assertEquals(32, RandomApiStub.requestCount()));
   }
 
   @Test

@@ -35,6 +35,12 @@ import org.testcontainers.kafka.KafkaContainer;
  * that has no metadata of the topic yet fails earlier (the limit of 2 s of {@code max.block.ms})
  * with the same line.
  *
+ * <p>Spring Kafka writes a second ERROR line of its own for the same send
+ * ({@code LoggingProducerListener}): it has the key, the first characters of the event (ids and
+ * the type, no amount and no payer in the first run) and the message of the exception. It is not
+ * ours, and this test does not judge it; whether to switch it off is an open point (the
+ * decisions log). The line of the service is the one that is counted here.
+ *
  * <p>What is NOT asserted: that the event is absent from the topic. A paused broker keeps the
  * bytes that were sent to it and may handle them after it is resumed (like the paused Redis of
  * the User Service keeps its commands), so the record may appear later. What is proved is the
@@ -49,10 +55,14 @@ class KafkaOutageIntegrationTest extends AbstractIntegrationTest {
   private static final Duration LOST_EVENT_DEADLINE = Duration.ofSeconds(90);
   private static final Duration HTTP_THREAD_LIMIT = Duration.ofSeconds(10);
 
-  /** A regular expression: the ids, the class of the cause (a name that ends in Exception). */
+  /**
+   * A regular expression: the ids and the class of the cause. It is the timeout of the delivery
+   * (seen in the first run: "30014 ms has passed since batch creation"); a send that cannot even
+   * get the metadata of the topic fails with a timeout too.
+   */
   private static final String LOST_EVENT_SHAPE = String.join(" ",
     "Event of payment %s of order 709002 NOT published",
-    "\\(\\w+Exception\\),",
+    "\\(TimeoutException\\),",
     "the Order Service was not told");
 
   @Autowired

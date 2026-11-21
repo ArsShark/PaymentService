@@ -86,9 +86,11 @@ final class RandomApiStub {
 
   /**
    * The requests are answered with these numbers one after the other, each after the delay, and
-   * the last number repeats. It is a WireMock scenario, so the order is exact for requests that
-   * come one by one; for requests that come at the same moment which one gets which number is
-   * not defined, and two of them may even get the same one.
+   * the last number repeats. It is a WireMock scenario, so use it ONLY for requests that come
+   * one by one: WireMock does not make "match and change the state" atomic, and a request that
+   * comes at the same moment as another may find no stub at all and get a 404 (seen in the
+   * first run of the parallel test, where it became a 502). For simultaneous requests use
+   * {@link #answersWithRandomNumbers(int)}.
    */
   static void answersInOrder(int delayMillis, long... numbers) {
     String state = Scenario.STARTED;
@@ -102,6 +104,21 @@ final class RandomApiStub {
         .willReturn(numberAnswer(numbers[i], delayMillis)));
       state = next;
     }
+  }
+
+  /**
+   * Every request is answered with a new random number of three digits after the delay. There is
+   * no state, so it is safe for requests that come at the same moment; which parity a request
+   * gets is not defined, so a test can only check what holds whatever the numbers are. The
+   * numbers are made by the response templating of WireMock ({@code randomValue}).
+   */
+  static void answersWithRandomNumbers(int delayMillis) {
+    SERVER.stubFor(get(urlPathEqualTo(PATH)).willReturn(aResponse()
+      .withStatus(200)
+      .withHeader("Content-Type", "text/plain;charset=UTF-8")
+      .withBody("{{randomValue length=3 type='NUMERIC'}}\n")
+      .withTransformers("response-template")
+      .withFixedDelay(delayMillis)));
   }
 
   /** The requests received so far, oldest first. */

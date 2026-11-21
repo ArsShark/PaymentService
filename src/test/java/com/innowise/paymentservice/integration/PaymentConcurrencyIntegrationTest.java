@@ -77,7 +77,8 @@ class PaymentConcurrencyIntegrationTest extends AbstractIntegrationTest {
   }
 
   /**
-   * The numbers are a mix of even and odd, and which request gets which number is not defined.
+   * The numbers are random, so the mix of even and odd is not defined. (A WireMock scenario
+   * cannot hand out numbers to simultaneous requests: some of them would get no answer at all.)
    * So only what holds whichever way it falls is checked: no error, at most one successful
    * payment, an answer for every stored payment and an event for every stored payment.
    */
@@ -85,7 +86,7 @@ class PaymentConcurrencyIntegrationTest extends AbstractIntegrationTest {
   void parallelPaymentsWithMixedNumbersNeverMakeMoreThanOneSuccess(RepetitionInfo info)
     throws Exception {
     long orderId = 707_100 + info.getCurrentRepetition();
-    RandomApiStub.answersInOrder(200, 2, 3, 4, 5, 6, 7, 8, 9);
+    RandomApiStub.answersWithRandomNumbers(200);
 
     List<MockHttpServletResponse> answers = runTogether(payersOf(orderId));
 
