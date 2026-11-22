@@ -100,10 +100,12 @@ Compose network. Port 8084 must be free, so stop the application in the IDE firs
 
 The image creates the **administrator** (`MONGO_ROOT_USERNAME`) in the database `admin`. A script
 of `docker/mongodb` then creates the **user of the application** (`MONGO_USERNAME`), also in
-`admin`, with the role `readWrite` on the one database of the application (`MONGO_DB`). That
-user can create the collection and its indexes (the Liquibase changelog does) and read and write
-documents; it cannot create users or touch another database (least privilege). The application
-runs as this user, with `MONGO_AUTH_DB=admin` (the default).
+`admin`, with a role `<MONGO_DB>_app` on the one database of the application (`MONGO_DB`). The
+role is the built-in `readWrite` plus the one action `collMod`: the user can create the
+collection and its indexes (the Liquibase changelog does), read and write documents, and change
+the validator of the history collection of Liquibase (`DATABASECHANGELOG`), which `readWrite`
+alone does not allow. It cannot create users, drop the database or touch another database
+(least privilege). The application runs as this user, with `MONGO_AUTH_DB=admin` (the default).
 
 The image runs the script ONCE, on the first start of an empty volume. Changing the names or
 passwords afterwards changes nothing in MongoDB; reset it with `docker compose down -v`, which

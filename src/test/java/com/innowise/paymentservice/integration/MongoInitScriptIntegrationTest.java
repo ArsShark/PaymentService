@@ -36,10 +36,11 @@ import org.testcontainers.utility.MountableFile;
  * <p>Unlike the other integration tests this class starts its own container and no Spring
  * context. The shared container of the other tests was started without the script, and the
  * script runs only on the first start of an empty data directory, so it cannot be tested there.
- * What matters is that the least-privilege user can do what the application does at startup (the
- * Liquibase changelog creates the collection with its validator and its indexes) and nothing
+ * What matters is that the least-privilege user (readWrite plus collMod) can do what the
+ * application does at startup (the Liquibase changelog creates the collection with its validator
+ * and its indexes, and Liquibase puts a validator on its own history collection) and nothing
  * more. The tests of the application itself use the administrator and cannot show a missing
- * right.
+ * right: the first run of this test found that readWrite alone is not enough.
  */
 @Tag("integration")
 class MongoInitScriptIntegrationTest {
@@ -114,7 +115,7 @@ class MongoInitScriptIntegrationTest {
   }
 
   @Test
-  void theUserHasNoRightsOutsideItsDatabaseAndCannotCreateUsers() {
+  void theUserCannotUseAnotherDatabaseCreateUsersOrDropItsOwnDatabase() {
     try (MongoClient client = clientOf(APP_USERNAME, APP_PASSWORD, "admin")) {
       assertAll(
         () -> assertEquals(UNAUTHORIZED, assertThrows(MongoException.class,
@@ -122,7 +123,10 @@ class MongoInitScriptIntegrationTest {
             .insertOne(new Document("a", 1))).getCode()),
         () -> assertEquals(UNAUTHORIZED, assertThrows(MongoException.class,
           () -> client.getDatabase("admin").runCommand(new Document("createUser", "intruder")
-            .append("pwd", "intruder-password").append("roles", List.of()))).getCode()));
+            .append("pwd", "intruder-password").append("roles", List.of()))).getCode()),
+        () -> assertEquals(UNAUTHORIZED, assertThrows(MongoException.class,
+          () -> client.getDatabase(DATABASE).runCommand(new Document("dropDatabase", 1)))
+          .getCode()));
     }
   }
 
