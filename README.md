@@ -5,7 +5,7 @@ system with the Authentication Service, the API Gateway, the User Service and th
 
 > Work in progress: the database schema (JACAG-21), the DAO layer (JACAG-22), the service layer
 > (JACAG-23), the Kafka producer (JACAG-24, the consumer is in the Order Service) and the REST API
-> with its security are done. The container setup and the CI pipeline follow.
+> with its security and the container setup (JACAG-27) are done. The CI pipeline follows.
 
 ## Stack
 
@@ -19,7 +19,8 @@ system with the Authentication Service, the API Gateway, the User Service and th
 ## Requirements
 
 - JDK 21
-- Docker (the tests, the local MongoDB and the local Kafka)
+- Docker (the tests; MongoDB and Kafka for a run from the IDE, or the whole service in
+  containers)
 - Maven Wrapper is included in the project
 
 ## Configuration
@@ -29,16 +30,17 @@ every default.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MONGO_USERNAME` | none, required | MongoDB user |
-| `MONGO_PASSWORD` | none, required | MongoDB password |
-| `MONGO_HOST` | `localhost` | MongoDB host |
-| `MONGO_PORT` | `27017` | MongoDB port |
+| `MONGO_USERNAME` | none, required | MongoDB user of the application (in a container the script of `docker/mongodb` creates it on the first start) |
+| `MONGO_PASSWORD` | none, required | its password |
+| `MONGO_ROOT_USERNAME`, `MONGO_ROOT_PASSWORD` | none | only for Docker Compose: the administrator of the MongoDB container; the application never uses it |
+| `MONGO_HOST` | `localhost` (`local`), `mongodb` (`docker`) | MongoDB host |
+| `MONGO_PORT` | `27017` | MongoDB port (in `.env` it is also the port that `docker-compose.dev.yml` publishes on `127.0.0.1`) |
 | `MONGO_DB` | `payment_service_db` | database name |
 | `MONGO_AUTH_DB` | `admin` | database in which the user was created |
-| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | address of the Kafka broker (profile `local`) |
-| `KAFKA_PORT` | `9092` | only for Docker Compose: the port that Kafka publishes on `127.0.0.1` |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` (`local`), `kafka:19092` (`docker`) | address of the Kafka broker |
+| `KAFKA_PORT` | `9092` | only for `docker-compose.dev.yml`: the port that Kafka publishes on `127.0.0.1` |
 | `RANDOM_API_URI` | `https://www.random.org` | address of the random number service |
-| `AUTH_JWKS_URI` | `http://localhost:8081/.well-known/jwks.json` | key set of the Authentication Service (profile `local`); the internal address, never the API Gateway |
+| `AUTH_JWKS_URI` | `http://localhost:8081/.well-known/jwks.json` (`local`), `http://authentication-service:8081/.well-known/jwks.json` (`docker`; the Compose file of this repository sets `http://host.docker.internal:8081/...`) | key set of the Authentication Service; the internal address, never the API Gateway |
 | `JWT_ISSUER` | `authentication-service` | the issuer that an access token must have; the same value as in the Authentication Service |
 | `SERVER_PORT` | `8084` | HTTP port |
 | `LOG_DIR` | `logs` | folder of the log files |
@@ -51,22 +53,83 @@ endpoint of another service. Fixed in `application.yml`: at most 100 items per p
 `server.forward-headers-strategy: framework`, so that the `Location` of a created payment follows
 the address of the client behind the API Gateway.
 
-## Run MongoDB and Kafka locally
+### Spring profiles
+
+| Profile | When | MongoDB | Kafka | Key set |
+|---|---|---|---|---|
+| `local` (default) | the IDE, `.\mvnw spring-boot:run` | `localhost:27017` | `localhost:9092` | `http://localhost:8081/...` |
+| `docker` | the container (Compose sets `SPRING_PROFILES_ACTIVE=docker`) | `mongodb:27017` | `kafka:19092` | `http://authentication-service:8081/...` |
+
+The profile files hold only addresses; credentials are never stored in them and every default is
+replaced by an environment variable. The profile `local` also reads the `.env` file of the
+working directory; the profile `docker` does not (a container gets its settings from the
+`environment` of the Compose file). The one URL in `application.yml` is the random number
+service, which is the same in every environment. `SpringProfilesTest` checks all of this without
+starting Spring.
+
+## Run with Docker
 
 ```
-copy .env.example .env      # then set real values in .env
-docker compose up -d
-docker compose ps           # the status of mongodb and kafka becomes "healthy"
+copy .env.example .env      # then set the names and passwords in .env
+docker compose up --build
+```
+
+Compose starts MongoDB and Kafka, waits until both are healthy, builds the image
+`payment-service:dev` and starts the application on `http://localhost:8084` with the profile
+`docker`. Only this port is published: MongoDB and Kafka can be reached only from inside the
+Compose network. Port 8084 must be free, so stop the application in the IDE first.
+
+| Service | Image | What it is |
+|---|---|---|
+| `app` | `payment-service:dev` (built here) | the application, port 8084, logs in the volume `app-logs` (`/app/logs/payment-service.log`) |
+| `mongodb` | `mongo:8` | the data is in the volume `mongo-data` |
+| `kafka` | `apache/kafka:4.2.0` | one KRaft broker with one listener (`kafka:19092`), no volume: `docker compose down` removes the topics and the application declares them again when it starts |
+
+- **The Authentication Service is not part of this file.** The application needs it only to check
+  the access tokens (the key set is fetched on the first request), so it can start without it,
+  but every token is a 401 until the key set is reachable. By default it is expected on the host,
+  where its own Compose file or the IDE runs it: `http://host.docker.internal:8081/...`. The
+  Compose file in which all services run together is in the Infrastructure repository
+  (`https://github.com/ArsShark/Infrastructure`).
+- **The random number service** (`RANDOM_API_URI`, random.org by default) is on the internet: the
+  container needs access to it. Without it a payment is a 502 and nothing is saved.
+- `docker compose down` keeps the data; `docker compose down -v` deletes it (the MongoDB volume
+  and the logs).
+
+### The two MongoDB users
+
+The image creates the **administrator** (`MONGO_ROOT_USERNAME`) in the database `admin`. A script
+of `docker/mongodb` then creates the **user of the application** (`MONGO_USERNAME`), also in
+`admin`, with the role `readWrite` on the one database of the application (`MONGO_DB`). That
+user can create the collection and its indexes (the Liquibase changelog does) and read and write
+documents; it cannot create users or touch another database (least privilege). The application
+runs as this user, with `MONGO_AUTH_DB=admin` (the default).
+
+The image runs the script ONCE, on the first start of an empty volume. Changing the names or
+passwords afterwards changes nothing in MongoDB; reset it with `docker compose down -v`, which
+deletes the data. The health check of `mongodb` logs in as the user of the application, so the
+application starts only after the script has run. `MongoInitScriptIntegrationTest` proves the
+script on a real, empty container.
+
+## Run locally (the application in the IDE)
+
+Start only MongoDB and Kafka, published on the loopback interface of the host, with the second
+Compose file (it is not read automatically):
+
+```
+copy .env.example .env      # if you have not done it; then set the values in .env
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d mongodb kafka
+docker compose -f docker-compose.yml -f docker-compose.dev.yml ps    # both become "healthy"
 ```
 
 The first start downloads the Kafka image (about 700 MB). Kafka has no volume: `docker compose
 down` removes its topics, and the application declares them again when it starts. It is
-published only on `127.0.0.1:9092`. If you change `KAFKA_PORT`, set `KAFKA_BOOTSTRAP_SERVERS`
-to the same port.
+published only on `127.0.0.1:9092` (an extra listener of `docker-compose.dev.yml`). If you change
+`KAFKA_PORT`, set `KAFKA_BOOTSTRAP_SERVERS` to the same port. MongoDB is published only on
+`127.0.0.1`.
 
-The user is created on the FIRST start, when the volume is empty. Changing `MONGO_PASSWORD`
-afterwards changes nothing in MongoDB; reset it with `docker compose down -v`, which deletes the
-data. MongoDB is published only on `127.0.0.1`.
+The users are created on the FIRST start, when the volume is empty (see above). Stop with the
+same two `-f` options and `down` (add `-v` to delete the data).
 
 Run the application from the IDE or with `.\mvnw spring-boot:run` from the project folder: the
 profile `local` also reads the `.env` file of the working directory (as Java properties, so no
@@ -307,11 +370,12 @@ After a payment is saved, the service sends the event `CREATE_PAYMENT` to the to
   `max.block.ms`), never for the delivery. The outcome is logged by the callback: INFO with the
   partition and the offset, or ERROR `Event of payment ... NOT published`.
 
-How to look at it by hand (PowerShell, the stack of this README is running):
+How to look at it by hand (PowerShell, MongoDB and Kafka of this README are running, in either
+mode; the commands run inside the container and use its listener `kafka:19092`):
 
 ```
-docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic payment-events
-docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic payment-events --from-beginning --property print.key=true --property print.partition=true --property print.offset=true
+docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:19092 --describe --topic payment-events
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:19092 --topic payment-events --from-beginning --property print.key=true --property print.partition=true --property print.offset=true
 ```
 
 Known limits of the events:
@@ -349,6 +413,7 @@ integration tests):
 | `PaymentEventMapperTest` | the event of a payment: the facts, the amount as text with two decimal places, the stable event id |
 | `PaymentEventPublisherTest` | Mockito: topic, key and value of the send; no failure of Kafka (at once or later) or of the mapping reaches the caller |
 | `PaymentMapperTest`, `PaymentRequestValidationTest`, `RandomApiPropertiesTest`, `ClockConfigTest`, `CallerTest`, `PaymentFilterTest` | the pieces on their own |
+| `SpringProfilesTest` | the configuration files without Spring: the defaults of `local` and `docker`, the override by environment variables, the same keys in both profiles (the import of `.env` only in `local`), no credentials, and the random number service as the only URL of `application.yml` |
 | `PaymentControllerTest` | the HTTP contract of every endpoint with the real security chain and a mocked service: statuses, `Location`, JSON, the payer from the token, validation, errors, the page limit |
 | `PaymentAccessMatrixTest` | every path and method (and some that must not exist) against an anonymous caller, a user, an admin, an admin without a profile and an unknown role |
 | `ControllerMethodSecurityTest`, `CallersTest` | every handler declares its `@PreAuthorize`; the caller comes from the verified token only |
@@ -372,6 +437,7 @@ server instead of the random number service, see `RandomApiStub`):
 | `ForwardedHeadersIntegrationTest` | the `Location` of a created payment follows the `X-Forwarded-*` headers of the Gateway |
 | `PaymentConcurrencyIntegrationTest` | eight parallel payments of one order, repeated five times: with the answer delayed so that the unique index decides, exactly one 201, seven 409, one document and one event; with mixed numbers, only what holds whichever way the requests interleave |
 | `ApiSecretsNotLoggedIntegrationTest` | one run with every kind of success and refusal, then no token, email, address of the key set or of the random number service, database password, duplicate key text or value of a refused request is in the log |
+| `MongoInitScriptIntegrationTest` | an empty `mongo:8` container with the init script, like Compose starts it (own container, no Spring context): the user of the application applies the Liquibase changelog, cannot touch another database and cannot create users, even with a password full of special characters |
 | `KafkaOutageIntegrationTest` | the broker is paused: the payment is answered and saved, the HTTP thread is not held, one line at ERROR level names the payment, the order and the class of the cause; the producer works again after the resume |
 
 `PaymentApiIntegrationTest` (a 504 takes as long as the read timeout, 5 s),
@@ -405,11 +471,16 @@ application cover.
 |---|---|
 | `Could not resolve placeholder 'MONGO_USERNAME'` | there is no `.env` in the working directory of the run (the IDE must run in the project folder) and the variable is not set |
 | `Authentication failed` | the user was created with other values: `docker compose down -v` and start again |
+| `mongodb` is `unhealthy` and `app` does not start | the health check logs in as the user of the application, which the script creates on the first start only. The volume was created before the script existed or with other `MONGO_USERNAME` and `MONGO_PASSWORD`: `docker compose down -v` and start again |
+| `required variable MONGO_ROOT_PASSWORD is missing a value` (or another `MONGO_*`) | `.env` has no such line (copy `.env.example`) or Compose runs in another folder; a variable set in the shell wins over `.env` |
+| `port is already allocated` or `address already in use` for 8084 | the application still runs in the IDE |
+| In the container every call is a 401 and the log has `A token could not be verified` | the Authentication Service does not run on the host (8081), or the Windows firewall blocks the connection from Docker to its Java process (allow Java), or `.env` sets a `localhost` address in `AUTH_JWKS_URI` |
+| In the container a payment is a 502 `The random number service is not available` | the container has no access to the internet, or the quota of random.org is used up; a stand-in service can be set with `RANDOM_API_URI` |
 | `Applying the MongoDB changelog failed: ... timed out` | MongoDB is not running or the port is different |
 | Every call is a 401 and the log has `A token could not be verified` | the Authentication Service is not running or `AUTH_JWKS_URI` points to another address; in a container `localhost` is the container itself |
 | Every call is a 401 and the log has no such line | the token is not valid: expired (15 minutes), another issuer (`JWT_ISSUER`), or a refresh token instead of an access token |
 | `POST /api/payments` is a 403 for an admin | the token has no `user_id`: the first admin of the Authentication Service has no profile, so there is no payer. Pay as a user |
 | `from` or `before` is a 400 | the value is not an ISO-8601 instant, or the `+` of an offset was sent as a space: use `Z` or `%2B` |
-| `Connection to node -1 (localhost/127.0.0.1:9092) could not be established` in the log | Kafka is not running (`docker compose up -d`) or `KAFKA_BOOTSTRAP_SERVERS` points to another port. The application still starts; the topic is created at the next start |
+| `Connection to node -1 (localhost/127.0.0.1:9092) could not be established` in the log | Kafka is not running (`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d mongodb kafka`) or `KAFKA_BOOTSTRAP_SERVERS` points to another port. The application still starts; the topic is created at the next start |
 | ERROR `Event of payment ... NOT published (TimeoutException)` | Kafka was not reachable, or the topic does not exist (Kafka was started after the application, or `docker compose down` removed it: restart the application). The payment is saved. Start Kafka, and tell the Order Service about the payment by hand if it matters |
 | The first changeSet fails because the collection `payments` already exists | The collection was created by hand (for example by an `insertMany` in `mongosh`) before the application first started, so it has no validator and no indexes. `db.payments.drop()` in `mongosh` and start the application again, or `docker compose down -v` |
