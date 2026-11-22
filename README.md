@@ -20,7 +20,7 @@ system with the Authentication Service, the API Gateway, the User Service and th
 
 - JDK 21
 - Docker (the tests; MongoDB and Kafka for a run from the IDE, or the whole service in
-  containers)
+  containers) with Docker Compose 2.23.1 or newer (the init script of MongoDB is an inline config)
 - Maven Wrapper is included in the project
 
 ## Configuration
@@ -106,6 +106,15 @@ collection and its indexes (the Liquibase changelog does), read and write docume
 the validator of the history collection of Liquibase (`DATABASECHANGELOG`), which `readWrite`
 alone does not allow. It cannot create users, drop the database or touch another database
 (least privilege). The application runs as this user, with `MONGO_AUTH_DB=admin` (the default).
+
+The script reaches the container as an inline `configs` entry of `docker-compose.yml`, not as a
+mounted file. A bind mount needs the drive of the project to be visible to the Docker daemon;
+with Docker Desktop on Windows a USB drive is not, and the container then gets an empty
+directory in place of the file (the image stops with `EISDIR`). The text in the Compose file is
+a copy of `docker/mongodb/01-create-app-user.js`, which is the source: edit the file and copy it
+into the Compose file (indented by 6 spaces). `DockerComposeFilesTest` fails if the two differ.
+Compose interpolates variables in the text of an inline config, so the script has no dollar sign
+(the same test checks it).
 
 The image runs the script ONCE, on the first start of an empty volume. Changing the names or
 passwords afterwards changes nothing in MongoDB; reset it with `docker compose down -v`, which
@@ -415,6 +424,7 @@ integration tests):
 | `PaymentEventMapperTest` | the event of a payment: the facts, the amount as text with two decimal places, the stable event id |
 | `PaymentEventPublisherTest` | Mockito: topic, key and value of the send; no failure of Kafka (at once or later) or of the mapping reaches the caller |
 | `PaymentMapperTest`, `PaymentRequestValidationTest`, `RandomApiPropertiesTest`, `ClockConfigTest`, `CallerTest`, `PaymentFilterTest` | the pieces on their own |
+| `DockerComposeFilesTest` | the Compose files without Docker: the inline init script equals `docker/mongodb/01-create-app-user.js`, the script has no dollar sign (Compose would interpolate it), MongoDB gets it in the directory of the image, and no service mounts a path of the host |
 | `SpringProfilesTest` | the configuration files without Spring: the defaults of `local` and `docker`, the override by environment variables, the same keys in both profiles (the import of `.env` only in `local`), no credentials, and the random number service as the only URL of `application.yml` |
 | `PaymentControllerTest` | the HTTP contract of every endpoint with the real security chain and a mocked service: statuses, `Location`, JSON, the payer from the token, validation, errors, the page limit |
 | `PaymentAccessMatrixTest` | every path and method (and some that must not exist) against an anonymous caller, a user, an admin, an admin without a profile and an unknown role |
@@ -473,6 +483,7 @@ application cover.
 |---|---|
 | `Could not resolve placeholder 'MONGO_USERNAME'` | there is no `.env` in the working directory of the run (the IDE must run in the project folder) and the variable is not set |
 | `Authentication failed` | the user was created with other values: `docker compose down -v` and start again |
+| `mongodb` exits with `Error: EISDIR: illegal operation on a directory, read` | a file of the project is mounted into a container and the Docker daemon cannot see the drive (a USB drive with Docker Desktop on Windows): it creates an empty directory in its place. The init script is an inline config for this reason; any other `./file:/path` mount from that drive would fail the same way. After the first failed start run `docker compose down -v` (the volume is half initialized) |
 | `mongodb` is `unhealthy` and `app` does not start | the health check logs in as the user of the application, which the script creates on the first start only. The volume was created before the script existed or with other `MONGO_USERNAME` and `MONGO_PASSWORD`: `docker compose down -v` and start again |
 | `required variable MONGO_ROOT_PASSWORD is missing a value` (or another `MONGO_*`) | `.env` has no such line (copy `.env.example`) or Compose runs in another folder; a variable set in the shell wins over `.env` |
 | `port is already allocated` or `address already in use` for 8084 | the application still runs in the IDE |

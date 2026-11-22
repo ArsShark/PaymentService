@@ -14,6 +14,11 @@
 //
 // The values come from the environment of the container, not from the text of the script, so a
 // password with quotes, dollar signs or backslashes needs no escaping.
+//
+// This file has no dollar sign at all, on purpose: docker-compose.yml holds a copy of this text
+// as an inline config (a bind mount of this file does not work on a drive that Docker Desktop
+// cannot see), and Compose treats a dollar sign in that text as a variable to interpolate.
+// DockerComposeFilesTest checks both the copy and the absence of the sign.
 const environment = process.env;
 const username = environment.MONGO_APP_USERNAME;
 const password = environment.MONGO_APP_PASSWORD;
@@ -27,7 +32,7 @@ const admin = db.getSiblingDB('admin');
 // The entrypoint runs the script as the administrator; the explicit login does not depend on it.
 admin.auth(environment.MONGO_INITDB_ROOT_USERNAME, environment.MONGO_INITDB_ROOT_PASSWORD);
 
-const roleName = `${database}_app`;
+const roleName = [database, 'app'].join('_');
 admin.createRole({
   role: roleName,
   privileges: [{ resource: { db: database, collection: '' }, actions: ['collMod'] }],
@@ -38,4 +43,4 @@ admin.createUser({
   pwd: password,
   roles: [{ role: roleName, db: 'admin' }]
 });
-print(`Created the user "${username}" with the role "${roleName}" on "${database}"`);
+print('Created the user', username, 'with the role', roleName, 'on', database);
