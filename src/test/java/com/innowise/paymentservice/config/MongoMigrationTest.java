@@ -185,4 +185,25 @@ class MongoMigrationTest {
       return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
     }
   }
+
+  @Test
+  void theFramesOfTheInnermostCauseNameTheCodeAndNeverTheMessages() {
+    IllegalStateException root = new IllegalStateException("the password is hunter2");
+    RuntimeException failure = new RuntimeException("mongodb://user:hunter2@host/db", root);
+
+    String frames = MongoMigration.rootCauseFrames(failure);
+
+    assertAll(
+      () -> assertTrue(frames.contains("MongoMigrationTest"), frames),
+      () -> assertTrue(frames.contains("theFramesOfTheInnermostCause"), frames),
+      () -> assertFalse(frames.contains("hunter2"), frames),
+      () -> assertTrue(frames.split("; ").length <= 15, frames));
+  }
+
+  @Test
+  void theFramesOfAFailureWithoutACauseAreItsOwn() {
+    String frames = MongoMigration.rootCauseFrames(new IllegalStateException("x"));
+
+    assertTrue(frames.contains("theFramesOfAFailureWithoutACauseAreItsOwn"), frames);
+  }
 }

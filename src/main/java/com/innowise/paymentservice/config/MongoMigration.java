@@ -48,6 +48,9 @@ public class MongoMigration implements InitializingBean {
   private static final int CONNECT_TIMEOUT_MS = 2000;
   static final int DEFAULT_SERVER_SELECTION_TIMEOUT_MS = 5000;
   private static final int MAX_CAUSE_DEPTH = 10;
+
+  /** How many frames of the innermost cause the startup failure shows. */
+  private static final int MAX_FRAMES = 15;
   private static final String MASK = "***";
 
   private final String host;
@@ -108,7 +111,8 @@ public class MongoMigration implements InitializingBean {
       });
     } catch (Exception e) {
       throw new IllegalStateException(String.format(
-        "Applying the MongoDB changelog failed: %s", describeFailure(e, url, password)));
+        "Applying the MongoDB changelog failed: %s | where: %s",
+        describeFailure(e, url, password), rootCauseFrames(e)));
     }
     LOGGER.info("The MongoDB changelog is applied");
   }
@@ -170,6 +174,30 @@ public class MongoMigration implements InitializingBean {
       current = current.getCause() == current ? null : current.getCause();
     }
     return description.toString();
+  }
+
+  /**
+   * The first frames of the innermost cause, as {@code class.method(file:line)}. The messages of
+   * the exceptions can hold the connection string or the password and are scrubbed by
+   * {@link #describeFailure}; the frames hold only names of code, so they are safe, and without
+   * them a failure inside a library (for example in the executable jar of Spring Boot) cannot be
+   * located: the stack trace is not logged on purpose.
+   */
+  static String rootCauseFrames(Throwable failure) {
+    Throwable root = failure;
+    for (int depth = 0; root.getCause() != null && root.getCause() != root
+         && depth < MAX_CAUSE_DEPTH; depth++) {
+      root = root.getCause();
+    }
+    StringBuilder frames = new StringBuilder();
+    StackTraceElement[] trace = root.getStackTrace();
+    for (int i = 0; i < Math.min(trace.length, MAX_FRAMES); i++) {
+      if (i > 0) {
+        frames.append("; ");
+      }
+      frames.append(trace[i]);
+    }
+    return frames.toString();
   }
 
   /**
