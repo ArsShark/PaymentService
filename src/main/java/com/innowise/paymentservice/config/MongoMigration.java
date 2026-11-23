@@ -49,6 +49,12 @@ public class MongoMigration implements InitializingBean {
   static final int DEFAULT_SERVER_SELECTION_TIMEOUT_MS = 5000;
   private static final int MAX_CAUSE_DEPTH = 10;
 
+  /**
+   * The class of the driver properties (with the application name): see
+   * {@link MongoDriverProperties}, which says why the extension needs it in the container.
+   */
+  static final String DRIVER_PROPERTIES = MongoDriverProperties.class.getName();
+
   /** How many frames of the innermost cause the startup failure shows. */
   private static final int MAX_FRAMES = 15;
   private static final String MASK = "***";
@@ -98,13 +104,14 @@ public class MongoMigration implements InitializingBean {
     String url = connectionUrl(
       host, port, database, username, password, authenticationDatabase, serverSelectionTimeoutMs);
     try (ResourceAccessor accessor = resourceAccessor()) {
-      // The accessor must be the one of the CURRENT SCOPE, not only an argument: Liquibase reads
-      // the scope for its own lookups (for example while it opens the connection), and the
-      // default of the scope is a class path scan that cannot open the nested jar of Spring Boot.
-      // This is what SpringLiquibase does.
+      // The accessor is also the one of the CURRENT SCOPE, as SpringLiquibase does: Liquibase
+      // reads the scope for its own lookups, and the default of the scope is a scan of the class
+      // path. A precaution for the executable jar of Spring Boot, not the cause of the failure
+      // that was met there: see MongoDriverProperties.
       Scope.child(Scope.Attr.resourceAccessor, accessor, () -> {
         try (Database liquibaseDatabase =
-               DatabaseFactory.getInstance().openDatabase(url, null, null, null, accessor);
+               DatabaseFactory.getInstance()
+                 .openDatabase(url, null, null, DRIVER_PROPERTIES, accessor);
              Liquibase liquibase = new Liquibase(CHANGELOG, accessor, liquibaseDatabase)) {
           liquibase.update(new Contexts(), new LabelExpression());
         }
@@ -118,12 +125,12 @@ public class MongoMigration implements InitializingBean {
   }
 
   /**
-   * The accessor through which Liquibase reads the changelog. It reads through the resource loader
-   * of Spring and NOT through the class loader of Liquibase ({@code ClassLoaderResourceAccessor}):
-   * in the executable jar of Spring Boot the classes are in a nested jar with the URL scheme
-   * {@code jar:nested:}, and Liquibase's own class path scan cannot open it ("nestedEntryName must
-   * not be empty"). The scan works on a plain class path, so the tests and the IDE never showed
-   * it; the container did. This is what {@code SpringLiquibase} does for the relational services.
+   * The accessor through which Liquibase reads the changelog: the resource loader of Spring (what
+   * {@code SpringLiquibase} uses), not the class path scan of Liquibase
+   * ({@code ClassLoaderResourceAccessor}), which has had trouble with the nested jars of the
+   * executable jar of Spring Boot. A precaution: the failure that stopped the container was in
+   * the MongoDB extension and not here (see {@link MongoDriverProperties}), so this choice is not
+   * proved by that failure.
    */
   static ResourceAccessor resourceAccessor() {
     return new SpringResourceAccessor(

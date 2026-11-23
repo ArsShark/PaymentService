@@ -151,14 +151,20 @@ environment variables win over `.env`. In the `docker` profile `.env` is not rea
 
 The collection `payments` is created by Liquibase when the application starts
 (`src/main/resources/db/changelog`). Spring Boot has no Liquibase support for MongoDB, so
-`MongoMigration` runs the changelog by hand, and reads it through the resource loader of Spring
-(`SpringResourceAccessor`), as `SpringLiquibase` does, and puts that accessor into the current
-Liquibase scope (`Scope.child`): Liquibase reads the scope for its own lookups, for example while it
-opens the connection, not only the argument that it is given. The class loader scan of Liquibase
-(`ClassLoaderResourceAccessor`) cannot open the nested jar of the executable jar of Spring Boot
-(`jar:nested:`): it works from the IDE and in the tests, which run on a plain class path, and
-fails only in the container with `nestedEntryName must not be empty`. Run the container after any
-change in how the changelog is found.
+`MongoMigration` runs the changelog by hand. It reads the files through the resource loader of
+Spring (`SpringResourceAccessor`) and puts that accessor into the current Liquibase scope, as
+`SpringLiquibase` does: precautions for the executable jar of Spring Boot.
+
+The Liquibase MongoDB extension had a real problem there. When the connection has no `appName`,
+`MongoConnection.getVersion()` builds the URL of its own manifest from the text before the FIRST
+`!` of the URL of its class. In the executable jar the URL is
+`jar:nested:/app/app.jar/!BOOT-INF/lib/liquibase-mongodb.jar!/...`, so the manifest URL has an
+empty nested entry and the loader of Spring Boot fails with `nestedEntryName must not be empty`
+(liquibase-mongodb issue 612). On a plain class path there is one `!` and it works, so the IDE
+and the tests never showed it; only the container did. `MongoDriverProperties` gives the
+connection an `appName`, so the extension never asks for its version. `MongoDriverPropertiesTest`
+pins this contract; the run of the container is the proof, so run it after any change in how
+Liquibase starts.
 
 | Field | BSON type | Meaning |
 |---|---|---|
@@ -496,7 +502,7 @@ application cover.
 | `port is already allocated` or `address already in use` for 8084 | the application still runs in the IDE |
 | In the container every call is a 401 and the log has `A token could not be verified` | the Authentication Service does not run on the host (8081), or the Windows firewall blocks the connection from Docker to its Java process (allow Java), or `.env` sets a `localhost` address in `AUTH_JWKS_URI` |
 | In the container a payment is a 502 `The random number service is not available` | the container has no access to the internet, or the quota of random.org is used up; a stand-in service can be set with `RANDOM_API_URI` |
-| `Applying the MongoDB changelog failed: ... IllegalArgumentException: nestedEntryName must not be empty` (only in the container) | the changelog was read by the class loader scan of Liquibase, which cannot open the nested jar of Spring Boot. `MongoMigration` uses `SpringResourceAccessor` for this reason: see the section Database |
+| `Applying the MongoDB changelog failed: ... IllegalArgumentException: nestedEntryName must not be empty` (only in the container) | `MongoConnection.getVersion()` of the Liquibase MongoDB extension fails on the nested jar of Spring Boot unless the connection has an `appName`: `MongoDriverProperties` gives it one. If the message comes back, the frames after `where:` name the class: see the section Database |
 | `Applying the MongoDB changelog failed: ... | where: <frames>` | the text after `where:` is the first frames of the innermost cause (names of code only, never messages): they say which class of which library failed. Send them when a startup failure is unclear |
 | `Applying the MongoDB changelog failed: ... timed out` | MongoDB is not running or the port is different |
 | Every call is a 401 and the log has `A token could not be verified` | the Authentication Service is not running or `AUTH_JWKS_URI` points to another address; in a container `localhost` is the container itself |

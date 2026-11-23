@@ -153,10 +153,9 @@ class MongoMigrationTest {
   }
 
   /**
-   * The changelog is read through the resource loader of Spring. Liquibase's own class path scan
-   * cannot open the nested jar of the executable jar of Spring Boot, and a test on a plain class
-   * path cannot show that: it passes with either accessor. The type is therefore pinned here, and
-   * the run of the container is the proof.
+   * The changelog is read through the resource loader of Spring, as SpringLiquibase does: a
+   * precaution for the executable jar of Spring Boot. A test on a plain class path passes with
+   * either accessor, so the type is only pinned here, and the run of the container is the proof.
    */
   @Test
   void theChangelogIsReadThroughTheResourceLoaderOfSpring() throws Exception {
