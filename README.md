@@ -152,7 +152,9 @@ environment variables win over `.env`. In the `docker` profile `.env` is not rea
 The collection `payments` is created by Liquibase when the application starts
 (`src/main/resources/db/changelog`). Spring Boot has no Liquibase support for MongoDB, so
 `MongoMigration` runs the changelog by hand, and reads it through the resource loader of Spring
-(`SpringResourceAccessor`), as `SpringLiquibase` does. The class loader scan of Liquibase
+(`SpringResourceAccessor`), as `SpringLiquibase` does, and puts that accessor into the current
+Liquibase scope (`Scope.child`): Liquibase reads the scope for its own lookups, for example while it
+opens the connection, not only the argument that it is given. The class loader scan of Liquibase
 (`ClassLoaderResourceAccessor`) cannot open the nested jar of the executable jar of Spring Boot
 (`jar:nested:`): it works from the IDE and in the tests, which run on a plain class path, and
 fails only in the container with `nestedEntryName must not be empty`. Run the container after any

@@ -7,6 +7,7 @@ import java.util.Objects;
 import liquibase.Contexts;
 import liquibase.LabelExpression;
 import liquibase.Liquibase;
+import liquibase.Scope;
 import liquibase.database.Database;
 import liquibase.database.DatabaseFactory;
 import liquibase.integration.spring.SpringResourceAccessor;
@@ -93,11 +94,18 @@ public class MongoMigration implements InitializingBean {
     LOGGER.info("Applying the MongoDB changelog {}", CHANGELOG);
     String url = connectionUrl(
       host, port, database, username, password, authenticationDatabase, serverSelectionTimeoutMs);
-    try (ResourceAccessor accessor = resourceAccessor();
-         Database liquibaseDatabase =
-           DatabaseFactory.getInstance().openDatabase(url, null, null, null, accessor);
-         Liquibase liquibase = new Liquibase(CHANGELOG, accessor, liquibaseDatabase)) {
-      liquibase.update(new Contexts(), new LabelExpression());
+    try (ResourceAccessor accessor = resourceAccessor()) {
+      // The accessor must be the one of the CURRENT SCOPE, not only an argument: Liquibase reads
+      // the scope for its own lookups (for example while it opens the connection), and the
+      // default of the scope is a class path scan that cannot open the nested jar of Spring Boot.
+      // This is what SpringLiquibase does.
+      Scope.child(Scope.Attr.resourceAccessor, accessor, () -> {
+        try (Database liquibaseDatabase =
+               DatabaseFactory.getInstance().openDatabase(url, null, null, null, accessor);
+             Liquibase liquibase = new Liquibase(CHANGELOG, accessor, liquibaseDatabase)) {
+          liquibase.update(new Contexts(), new LabelExpression());
+        }
+      });
     } catch (Exception e) {
       throw new IllegalStateException(String.format(
         "Applying the MongoDB changelog failed: %s", describeFailure(e, url, password)));
