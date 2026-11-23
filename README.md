@@ -151,7 +151,12 @@ environment variables win over `.env`. In the `docker` profile `.env` is not rea
 
 The collection `payments` is created by Liquibase when the application starts
 (`src/main/resources/db/changelog`). Spring Boot has no Liquibase support for MongoDB, so
-`MongoMigration` runs the changelog by hand.
+`MongoMigration` runs the changelog by hand, and reads it through the resource loader of Spring
+(`SpringResourceAccessor`), as `SpringLiquibase` does. The class loader scan of Liquibase
+(`ClassLoaderResourceAccessor`) cannot open the nested jar of the executable jar of Spring Boot
+(`jar:nested:`): it works from the IDE and in the tests, which run on a plain class path, and
+fails only in the container with `nestedEntryName must not be empty`. Run the container after any
+change in how the changelog is found.
 
 | Field | BSON type | Meaning |
 |---|---|---|
@@ -489,6 +494,7 @@ application cover.
 | `port is already allocated` or `address already in use` for 8084 | the application still runs in the IDE |
 | In the container every call is a 401 and the log has `A token could not be verified` | the Authentication Service does not run on the host (8081), or the Windows firewall blocks the connection from Docker to its Java process (allow Java), or `.env` sets a `localhost` address in `AUTH_JWKS_URI` |
 | In the container a payment is a 502 `The random number service is not available` | the container has no access to the internet, or the quota of random.org is used up; a stand-in service can be set with `RANDOM_API_URI` |
+| `Applying the MongoDB changelog failed: ... IllegalArgumentException: nestedEntryName must not be empty` (only in the container) | the changelog was read by the class loader scan of Liquibase, which cannot open the nested jar of Spring Boot. `MongoMigration` uses `SpringResourceAccessor` for this reason: see the section Database |
 | `Applying the MongoDB changelog failed: ... timed out` | MongoDB is not running or the port is different |
 | Every call is a 401 and the log has `A token could not be verified` | the Authentication Service is not running or `AUTH_JWKS_URI` points to another address; in a container `localhost` is the container itself |
 | Every call is a 401 and the log has no such line | the token is not valid: expired (15 minutes), another issuer (`JWT_ISSUER`), or a refresh token instead of an access token |

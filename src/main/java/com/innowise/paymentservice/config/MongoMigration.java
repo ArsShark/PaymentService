@@ -9,13 +9,14 @@ import liquibase.LabelExpression;
 import liquibase.Liquibase;
 import liquibase.database.Database;
 import liquibase.database.DatabaseFactory;
-import liquibase.resource.ClassLoaderResourceAccessor;
+import liquibase.integration.spring.SpringResourceAccessor;
 import liquibase.resource.ResourceAccessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
+import org.springframework.core.io.DefaultResourceLoader;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -92,8 +93,7 @@ public class MongoMigration implements InitializingBean {
     LOGGER.info("Applying the MongoDB changelog {}", CHANGELOG);
     String url = connectionUrl(
       host, port, database, username, password, authenticationDatabase, serverSelectionTimeoutMs);
-    try (ResourceAccessor accessor =
-           new ClassLoaderResourceAccessor(MongoMigration.class.getClassLoader());
+    try (ResourceAccessor accessor = resourceAccessor();
          Database liquibaseDatabase =
            DatabaseFactory.getInstance().openDatabase(url, null, null, null, accessor);
          Liquibase liquibase = new Liquibase(CHANGELOG, accessor, liquibaseDatabase)) {
@@ -103,6 +103,19 @@ public class MongoMigration implements InitializingBean {
         "Applying the MongoDB changelog failed: %s", describeFailure(e, url, password)));
     }
     LOGGER.info("The MongoDB changelog is applied");
+  }
+
+  /**
+   * The accessor through which Liquibase reads the changelog. It reads through the resource loader
+   * of Spring and NOT through the class loader of Liquibase ({@code ClassLoaderResourceAccessor}):
+   * in the executable jar of Spring Boot the classes are in a nested jar with the URL scheme
+   * {@code jar:nested:}, and Liquibase's own class path scan cannot open it ("nestedEntryName must
+   * not be empty"). The scan works on a plain class path, so the tests and the IDE never showed
+   * it; the container did. This is what {@code SpringLiquibase} does for the relational services.
+   */
+  static ResourceAccessor resourceAccessor() {
+    return new SpringResourceAccessor(
+      new DefaultResourceLoader(MongoMigration.class.getClassLoader()));
   }
 
   /**
