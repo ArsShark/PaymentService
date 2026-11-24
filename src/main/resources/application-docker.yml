@@ -1,0 +1,19 @@
+# Profile "docker": the application runs in a container. MongoDB, Kafka and the Authentication
+# Service are reached by the service names of the Compose network. Environment variables
+# override every default. Credentials (MONGO_USERNAME, MONGO_PASSWORD) have no defaults and are
+# never stored in this file.
+# Unlike the profile "local" this profile does not read the ".env" file: a container gets its
+# settings from the "environment" of the Compose file.
+spring:
+  mongodb:
+    host: ${MONGO_HOST:mongodb}
+    port: ${MONGO_PORT:27017}
+    database: ${MONGO_DB:payment_service_db}
+  kafka:
+    # The broker in the Compose network: its service name and the listener for containers.
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:19092}
+app:
+  security:
+    # The internal address of the Authentication Service in the Compose network: its service
+    # name, never the Gateway (the Gateway does not route the key set).
+    jwks-uri: ${AUTH_JWKS_URI:http://authentication-service:8081/.well-known/jwks.json}

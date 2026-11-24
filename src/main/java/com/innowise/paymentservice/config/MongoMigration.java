@@ -7,15 +7,17 @@ import java.util.Objects;
 import liquibase.Contexts;
 import liquibase.LabelExpression;
 import liquibase.Liquibase;
+import liquibase.Scope;
 import liquibase.database.Database;
 import liquibase.database.DatabaseFactory;
-import liquibase.resource.ClassLoaderResourceAccessor;
+import liquibase.integration.spring.SpringResourceAccessor;
 import liquibase.resource.ResourceAccessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
+import org.springframework.core.io.DefaultResourceLoader;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -46,6 +48,15 @@ public class MongoMigration implements InitializingBean {
   private static final int CONNECT_TIMEOUT_MS = 2000;
   static final int DEFAULT_SERVER_SELECTION_TIMEOUT_MS = 5000;
   private static final int MAX_CAUSE_DEPTH = 10;
+
+  /**
+   * The class of the driver properties (with the application name): see
+   * {@link MongoDriverProperties}, which says why the extension needs it in the container.
+   */
+  static final String DRIVER_PROPERTIES = MongoDriverProperties.class.getName();
+
+  /** How many frames of the innermost cause the startup failure shows. */
+  private static final int MAX_FRAMES = 15;
   private static final String MASK = "***";
 
   private final String host;
@@ -92,17 +103,38 @@ public class MongoMigration implements InitializingBean {
     LOGGER.info("Applying the MongoDB changelog {}", CHANGELOG);
     String url = connectionUrl(
       host, port, database, username, password, authenticationDatabase, serverSelectionTimeoutMs);
-    try (ResourceAccessor accessor =
-           new ClassLoaderResourceAccessor(MongoMigration.class.getClassLoader());
-         Database liquibaseDatabase =
-           DatabaseFactory.getInstance().openDatabase(url, null, null, null, accessor);
-         Liquibase liquibase = new Liquibase(CHANGELOG, accessor, liquibaseDatabase)) {
-      liquibase.update(new Contexts(), new LabelExpression());
+    try (ResourceAccessor accessor = resourceAccessor()) {
+      // The accessor is also the one of the CURRENT SCOPE, as SpringLiquibase does: Liquibase
+      // reads the scope for its own lookups, and the default of the scope is a scan of the class
+      // path. A precaution for the executable jar of Spring Boot, not the cause of the failure
+      // that was met there: see MongoDriverProperties.
+      Scope.child(Scope.Attr.resourceAccessor, accessor, () -> {
+        try (Database liquibaseDatabase =
+               DatabaseFactory.getInstance()
+                 .openDatabase(url, null, null, DRIVER_PROPERTIES, accessor);
+             Liquibase liquibase = new Liquibase(CHANGELOG, accessor, liquibaseDatabase)) {
+          liquibase.update(new Contexts(), new LabelExpression());
+        }
+      });
     } catch (Exception e) {
       throw new IllegalStateException(String.format(
-        "Applying the MongoDB changelog failed: %s", describeFailure(e, url, password)));
+        "Applying the MongoDB changelog failed: %s | where: %s",
+        describeFailure(e, url, password), rootCauseFrames(e)));
     }
     LOGGER.info("The MongoDB changelog is applied");
+  }
+
+  /**
+   * The accessor through which Liquibase reads the changelog: the resource loader of Spring (what
+   * {@code SpringLiquibase} uses), not the class path scan of Liquibase
+   * ({@code ClassLoaderResourceAccessor}), which has had trouble with the nested jars of the
+   * executable jar of Spring Boot. A precaution: the failure that stopped the container was in
+   * the MongoDB extension and not here (see {@link MongoDriverProperties}), so this choice is not
+   * proved by that failure.
+   */
+  static ResourceAccessor resourceAccessor() {
+    return new SpringResourceAccessor(
+      new DefaultResourceLoader(MongoMigration.class.getClassLoader()));
   }
 
   /**
@@ -149,6 +181,30 @@ public class MongoMigration implements InitializingBean {
       current = current.getCause() == current ? null : current.getCause();
     }
     return description.toString();
+  }
+
+  /**
+   * The first frames of the innermost cause, as {@code class.method(file:line)}. The messages of
+   * the exceptions can hold the connection string or the password and are scrubbed by
+   * {@link #describeFailure}; the frames hold only names of code, so they are safe, and without
+   * them a failure inside a library (for example in the executable jar of Spring Boot) cannot be
+   * located: the stack trace is not logged on purpose.
+   */
+  static String rootCauseFrames(Throwable failure) {
+    Throwable root = failure;
+    for (int depth = 0; root.getCause() != null && root.getCause() != root
+         && depth < MAX_CAUSE_DEPTH; depth++) {
+      root = root.getCause();
+    }
+    StringBuilder frames = new StringBuilder();
+    StackTraceElement[] trace = root.getStackTrace();
+    for (int i = 0; i < Math.min(trace.length, MAX_FRAMES); i++) {
+      if (i > 0) {
+        frames.append("; ");
+      }
+      frames.append(trace[i]);
+    }
+    return frames.toString();
   }
 
   /**

@@ -1,0 +1,46 @@
+// Runs ONCE, on the first start of the MongoDB container (an empty data volume), as a script of
+// /docker-entrypoint-initdb.d. The image has already created the administrator from
+// MONGO_INITDB_ROOT_USERNAME and MONGO_INITDB_ROOT_PASSWORD. This script creates the user of the
+// application with the least privilege that it needs, on ONE database:
+//   - the built-in role readWrite: create the collection and its indexes (the Liquibase changelog
+//     does) and read and write documents;
+//   - the one action collMod on top of it. Liquibase itself needs it: it applies a validator to
+//     its own history collection, DATABASECHANGELOG, and readWrite does not include collMod (it
+//     belongs to dbAdmin, which also allows dropping the database).
+// The user cannot create users, drop the database or touch another database.
+//
+// The role and the user are created in the database "admin", so the authentication database stays
+// "admin", the default of the application; their rights are on the database of the application.
+//
+// The values come from the environment of the container, not from the text of the script, so a
+// password with quotes, dollar signs or backslashes needs no escaping.
+//
+// This file has no dollar sign at all, on purpose: docker-compose.yml holds a copy of this text
+// as an inline config (a bind mount of this file does not work on a drive that Docker Desktop
+// cannot see), and Compose treats a dollar sign in that text as a variable to interpolate.
+// DockerComposeFilesTest checks both the copy and the absence of the sign.
+const environment = process.env;
+const username = environment.MONGO_APP_USERNAME;
+const password = environment.MONGO_APP_PASSWORD;
+const database = environment.MONGO_APP_DATABASE;
+
+if (!username || !password || !database) {
+  throw new Error('MONGO_APP_USERNAME, MONGO_APP_PASSWORD and MONGO_APP_DATABASE must be set');
+}
+
+const admin = db.getSiblingDB('admin');
+// The entrypoint runs the script as the administrator; the explicit login does not depend on it.
+admin.auth(environment.MONGO_INITDB_ROOT_USERNAME, environment.MONGO_INITDB_ROOT_PASSWORD);
+
+const roleName = [database, 'app'].join('_');
+admin.createRole({
+  role: roleName,
+  privileges: [{ resource: { db: database, collection: '' }, actions: ['collMod'] }],
+  roles: [{ role: 'readWrite', db: database }]
+});
+admin.createUser({
+  user: username,
+  pwd: password,
+  roles: [{ role: roleName, db: 'admin' }]
+});
+print('Created the user', username, 'with the role', roleName, 'on', database);

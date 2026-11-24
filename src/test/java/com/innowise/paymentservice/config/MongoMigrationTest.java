@@ -3,15 +3,22 @@ package com.innowise.paymentservice.config;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoCredential;
+import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Constructor;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
+import liquibase.integration.spring.SpringResourceAccessor;
+import liquibase.resource.ResourceAccessor;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
@@ -143,5 +150,59 @@ class MongoMigrationTest {
     assertAll(
       () -> assertFalse(thrown.getMessage().contains(AWKWARD_PASSWORD)),
       () -> assertFalse(thrown.getMessage().contains("p%40ss")));
+  }
+
+  /**
+   * The changelog is read through the resource loader of Spring, as SpringLiquibase does: a
+   * precaution for the executable jar of Spring Boot. A test on a plain class path passes with
+   * either accessor, so the type is only pinned here, and the run of the container is the proof.
+   */
+  @Test
+  void theChangelogIsReadThroughTheResourceLoaderOfSpring() throws Exception {
+    try (ResourceAccessor accessor = MongoMigration.resourceAccessor()) {
+      assertInstanceOf(SpringResourceAccessor.class, accessor);
+    }
+  }
+
+  @Test
+  void theMasterChangelogAndTheFilesItIncludesAreFoundByTheirPathsOnTheClassPath()
+    throws Exception {
+    try (ResourceAccessor accessor = MongoMigration.resourceAccessor()) {
+      String master = read(accessor, MongoMigration.CHANGELOG);
+      assertAll(
+        () -> assertTrue(master.contains("databaseChangeLog"), master),
+        () -> assertTrue(read(accessor, "db/changelog/changes/001-create-payments-collection.yaml")
+          .contains("databaseChangeLog")),
+        () -> assertTrue(read(accessor, "db/changelog/changes/002-create-payments-indexes.yaml")
+          .contains("databaseChangeLog")));
+    }
+  }
+
+  private static String read(ResourceAccessor accessor, String path) throws IOException {
+    try (InputStream stream = accessor.openStream(null, path)) {
+      assertNotNull(stream, path);
+      return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+    }
+  }
+
+  @Test
+  void theFramesOfTheInnermostCauseNameTheCodeAndNeverTheMessages() {
+    IllegalStateException root = new IllegalStateException("the password is hunter2");
+    RuntimeException failure = new RuntimeException("mongodb://user:hunter2@host/db", root);
+
+    String frames = MongoMigration.rootCauseFrames(failure);
+
+    assertAll(
+      () -> assertTrue(frames.contains("MongoMigrationTest"), frames),
+      () -> assertTrue(frames.contains("theFramesOfTheInnermostCause"), frames),
+      () -> assertFalse(frames.contains("hunter2"), frames),
+      () -> assertTrue(frames.split("; ").length <= 15, frames));
+  }
+
+  @Test
+  void theFramesOfAFailureWithoutACauseAreItsOwn() {
+    String frames = MongoMigration.rootCauseFrames(new IllegalStateException("x"));
+
+    assertTrue(frames.contains("theFramesOfAFailureWithoutACauseAreItsOwn"), frames);
   }
 }
