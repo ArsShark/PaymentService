@@ -105,14 +105,89 @@ jobs:
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push
+      # The image is built into the local Docker daemon under the name that docker-compose.yml
+      # uses, so that the next steps start exactly this image. The layers go to the cache of the
+      # workflow, which the step "Push the image" reads.
+      - name: Build the image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          push: ${{ env.PUBLISH == 'true' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          load: true
+          tags: payment-service:dev
           labels: ${{ steps.meta.outputs.labels }}
           # Keeps the package a single plain image, without extra attestation manifests.
           provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # The Compose file of the repository, as a developer runs it: the application image just
+      # built, MongoDB with its init script and Kafka. The placeholders of .env.example are good
+      # enough (nothing here is a secret). The image is not built again (--no-build); the step
+      # waits until the services are running or, for MongoDB and Kafka, healthy. A failure that
+      # shows only in a container (the executable jar, the init script, the user of the process)
+      # stops the job here and not in the system Compose file.
+      - name: Start the service with MongoDB and Kafka
+        id: system
+        run: |
+          docker compose version
+          cp .env.example .env
+          docker compose up --detach --no-build --wait --wait-timeout 180
+          docker compose ps
+
+      # The service has no health endpoint before the Kubernetes task. A request without a token
+      # is answered with the 401 of the security chain, so the answer proves that the context
+      # started: the Liquibase changelog ran on MongoDB, the Kafka producer and the key set
+      # settings were read, the web server listens.
+      - name: Wait for the application
+        run: |
+          status=000
+          for attempt in $(seq 1 60); do
+            status=$(curl --silent --output response.json --write-out '%{http_code}' http://localhost:8084/api/payments/my || true)
+            if [ "$status" = "401" ]; then
+              break
+            fi
+            sleep 2
+          done
+          echo "HTTP status of the last request: $status"
+          test "$status" = "401"
+          cat response.json
+          grep -q 'Authentication is required' response.json
+
+      - name: Check the container and the topic
+        run: |
+          user=$(docker compose exec -T app id -un)
+          echo "The application runs as: $user"
+          test "$user" = "app"
+          found=no
+          for attempt in $(seq 1 15); do
+            # The output goes to a variable first: "grep -q" closes the pipe at the first match and
+            # the shell of the runner runs with pipefail, so a pipe would fail for no reason.
+            topics=$(docker compose exec -T kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:19092 --list || true)
+            if grep -qx 'payment-events' <<< "$topics"; then
+              found=yes
+              break
+            fi
+            sleep 2
+          done
+          echo "The topic payment-events exists: $found"
+          test "$found" = "yes"
+
+      - name: Show the logs of the containers
+        if: failure() && steps.system.conclusion != 'skipped'
+        run: docker compose logs --no-color --timestamps
+
+      - name: Stop the service
+        if: always() && steps.system.conclusion != 'skipped'
+        run: docker compose down --volumes --remove-orphans
+
+      # The same layers again, from the cache of the step "Build the image".
+      - name: Push the image
+        if: env.PUBLISH == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          cache-from: type=gha
