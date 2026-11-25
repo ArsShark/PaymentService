@@ -1,11 +1,13 @@
 # Payment Service
 
+[![CI](https://github.com/ArsShark/PaymentService/actions/workflows/ci.yml/badge.svg)](https://github.com/ArsShark/PaymentService/actions/workflows/ci.yml)
+
 Payment microservice of the course e-commerce application (Innowise Java Advanced). Part of a
 system with the Authentication Service, the API Gateway, the User Service and the Order Service.
 
 > Work in progress: the database schema (JACAG-21), the DAO layer (JACAG-22), the service layer
 > (JACAG-23), the Kafka producer (JACAG-24, the consumer is in the Order Service) and the REST API
-> with its security and the container setup (JACAG-27) are done. The CI pipeline follows.
+> with its security, the container setup (JACAG-27) and the CI pipeline (JACAG-28) are done.
 
 ## Stack
 
@@ -489,6 +491,82 @@ start target\site\jacoco\index.html
 The unit tests alone cover the package `service` completely (instructions and branches). Run
 without `-DexcludedGroups=integration` the report also counts what the tests through the
 application cover.
+
+## CI pipeline
+
+The workflow `.github/workflows/ci.yml` (GitHub Actions) runs on every push, on pull requests into
+`main` and manually (Actions > CI > Run workflow).
+
+| Job      | Step                                  | What it does |
+|----------|---------------------------------------|--------------|
+| `build`  | Build                                 | `./mvnw -DskipTests package` |
+| `build`  | Test                                  | all tests (unit and integration: Testcontainers starts MongoDB and Kafka) and the JaCoCo report |
+| `build`  | Code analysis                         | SonarQube Cloud; only on pull requests into `main` and on pushes to `main`; the build waits for the quality gate and fails if it is not passed |
+| `build`  | Upload reports                        | JUnit and JaCoCo reports as the artifact `reports` (kept 14 days) |
+| `docker` | Build the image                       | builds the image from the `Dockerfile` into the Docker daemon of the runner, on every run (after `build` succeeded) |
+| `docker` | Start the service with MongoDB and Kafka | starts that image with the `docker-compose.yml` of the repository and a `.env` made from `.env.example`, and waits until the services run and MongoDB and Kafka are healthy |
+| `docker` | Wait for the application, Check the container and the topic | a request without a token is answered with the 401 of the security chain (so the context started and the Liquibase changelog ran), the process runs as the user `app`, the topic `payment-events` exists |
+| `docker` | Show the logs, Stop the service       | the logs of the containers on a failure; the containers and their volumes are always removed |
+| `docker` | Push the image                        | the same layers from the cache of the build step; only on pushes to `main` or on a manual run with `publish` ticked |
+
+The tests need no secrets and no environment variables: MongoDB and Kafka run in Testcontainers,
+the random number service and the key set of the Authentication Service are played inside the
+tests. The free plan of SonarQube Cloud analyses only `main` and pull requests into `main`, so
+pushes to other branches skip the analysis. The service has no health endpoint before the
+Kubernetes task, so the check of the image waits for the 401 of an unauthenticated request. The
+pipeline runs the same commands as a local build:
+
+```powershell
+.\mvnw -B -ntp -DskipTests package
+.\mvnw -B -ntp test
+```
+
+The check of the image can be repeated by hand (keep your own `.env` if you have one; the
+placeholders of `.env.example` are enough):
+
+```powershell
+docker build -t payment-service:dev .
+Copy-Item .env.example .env
+docker compose up -d --no-build --wait --wait-timeout 180
+curl.exe --noproxy "*" -i http://localhost:8084/api/payments/my      # 401
+docker compose exec -T app id -un                                    # app
+docker compose down -v
+```
+
+Published image (the package must be public to pull it without a login):
+
+```powershell
+docker pull ghcr.io/arsshark/paymentservice:latest      # last build of main
+docker pull ghcr.io/arsshark/paymentservice:sha-<short commit id>
+```
+
+It runs like the locally built image, see "Run with Docker". The Compose file of the whole system
+(Infrastructure repository) takes it as `PAYMENT_SERVICE_IMAGE`.
+
+Repository settings used by the pipeline (Settings > Secrets and variables > Actions):
+
+| Name                   | Kind     | Purpose |
+|------------------------|----------|---------|
+| `SONAR_TOKEN`          | secret   | token of the SonarQube Cloud project |
+| `SONAR_ORGANIZATION`   | variable | SonarQube Cloud organization key |
+| `SONAR_PROJECT_KEY`    | variable | SonarQube Cloud project key |
+
+Pushing to GHCR uses the built-in `GITHUB_TOKEN`, no extra secret is needed. The `docker/*`
+actions are pinned to commit SHAs (a tag can be moved, and the job may write packages); the
+GitHub-owned `actions/*` stay on a major tag.
+
+### CI troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| The step "Code analysis" fails with an authorization error | `SONAR_TOKEN`, `SONAR_ORGANIZATION` or `SONAR_PROJECT_KEY` is missing or wrong, or Automatic Analysis is still switched on in the SonarQube Cloud project. |
+| The step "Code analysis" fails after the analysis | The quality gate failed. Open the link in the log, fix the issue or, for a rule that does not apply (for example "CSRF protection is disabled": the API is stateless, the token is in a header and there are no cookies), set the status in SonarQube Cloud to Accepted with a reason. |
+| A step fails with `toomanyrequests` | Docker Hub limits the anonymous pulls of `mongo:8` and `apache/kafka:4.2.0` (the tests and the check of the image both pull them). Re-run the job. |
+| "Start the service with MongoDB and Kafka" fails | Read the step "Show the logs of the containers". The usual causes are the ones of "Troubleshooting" below: the init script of MongoDB, the changelog, the address of Kafka. |
+| "Start the service" fails with an unknown key `configs` or `content` | `docker compose` of the runner is older than 2.23.1 (the first line of the step prints its version). |
+| "Wait for the application" ends with the status `000` | Nothing listens on 8084: the application stopped or is still starting after two minutes; the logs are printed after the failure. |
+| `docker pull` of the image is denied | The package is private. Make it public in the package settings of the repository owner. |
+| The manual run has no `publish` box | The workflow file must be on `main` first. |
 
 ## Troubleshooting
 
